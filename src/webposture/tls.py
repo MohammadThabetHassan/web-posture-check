@@ -39,9 +39,9 @@ def check_certificate(not_after, verify_code, verify_message, now):
     if verify_code == VERIFY_CODE_EXPIRED:
         return Finding("tls-certificate", FAIL, "certificate has expired")
     if not_after is None:
-        # Other verification failures (wrong host, untrusted chain) are a
-        # separate problem; this check only reports expiry.
-        return Finding("tls-certificate", WARN, f"certificate could not be verified ({verify_message}), so its expiry was not checked")
+        # Wrong host, self-signed, untrusted chain, not yet valid: browsers show
+        # a full-page certificate error, so visitors cannot reach the site.
+        return Finding("tls-certificate", FAIL, f"certificate is not trusted: {verify_message}")
     date = not_after.strftime("%Y-%m-%d")
     days = (not_after - now).total_seconds() / 86400
     if days < 0:

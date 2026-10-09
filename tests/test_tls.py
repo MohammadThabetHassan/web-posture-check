@@ -40,11 +40,11 @@ class CheckCertificateTest(unittest.TestCase):
         self.assertEqual(f.status, FAIL)
         self.assertIn("expired on 2026-10-09", f.detail)
 
-    def test_other_verify_error_is_reported_without_checking_expiry(self):
-        f = tls.check_certificate(None, 62, "Hostname mismatch", NOW)
-        self.assertEqual(f.status, WARN)
-        self.assertIn("Hostname mismatch", f.detail)
-        self.assertIn("expiry was not checked", f.detail)
+    def test_other_verify_errors_fail_with_the_reason(self):
+        for code, message in ((62, "Hostname mismatch"), (18, "self-signed certificate"), (9, "certificate is not yet valid")):
+            f = tls.check_certificate(None, code, message, NOW)
+            self.assertEqual(f.status, FAIL, code)
+            self.assertIn(f"not trusted: {message}", f.detail)
 
 
 if __name__ == "__main__":
