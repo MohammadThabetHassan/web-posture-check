@@ -5,6 +5,12 @@ from unittest import mock
 from webposture import emailauth
 from webposture.findings import PASS, WARN, FAIL
 
+try:
+    import dns.resolver  # noqa: F401
+    HAVE_DNSPYTHON = True
+except ImportError:
+    HAVE_DNSPYTHON = False
+
 
 class MailDomainTest(unittest.TestCase):
     def test_strips_www_and_trailing_dot(self):
@@ -61,6 +67,18 @@ class LookupTxtTest(unittest.TestCase):
             txt, problem = emailauth.lookup_txt("example.com", 5)
         self.assertIsNone(txt)
         self.assertIn("web-posture-check[dns]", problem)
+
+    @unittest.skipUnless(HAVE_DNSPYTHON, "needs the optional dns extra")
+    def test_split_txt_strings_are_joined_without_spaces(self):
+        # RFC 7208 section 3.3: a TXT record split into several strings must be
+        # concatenated with no separator. Long SPF records (many includes) are
+        # split past 255 bytes, often mid-token, so a space-join would corrupt
+        # a domain like _spf.google.com into "_spf.goog le.com".
+        record = type("Txt", (), {"strings": (b"v=spf1 include:_spf.goog", b"le.com ~all")})
+        with mock.patch("dns.resolver.resolve", return_value=[record()]):
+            txt, problem = emailauth.lookup_txt("example.com", 5)
+        self.assertIsNone(problem)
+        self.assertEqual(txt, ["v=spf1 include:_spf.google.com ~all"])
 
 
 if __name__ == "__main__":
