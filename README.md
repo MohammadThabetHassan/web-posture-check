@@ -59,7 +59,7 @@ This makes it easy to use as a gate in CI.
 | `referrer-policy` | set to `unsafe-url` | missing |
 | `permissions-policy` | | missing |
 | `information-leakage` | | `Server` includes a version number, or `X-Powered-By`, `X-AspNet-Version` or `X-AspNetMvc-Version` is present |
-| `cookies` | a cookie on an HTTPS response lacks `Secure`, or any cookie sets `SameSite=None` without `Secure` (browsers reject it) | a cookie lacks `HttpOnly` or `SameSite` |
+| `cookies` | a cookie on an HTTPS response lacks `Secure`, any cookie sets `SameSite=None` without `Secure`, a `__Secure-` cookie lacks `Secure`, or a `__Host-` cookie lacks `Secure` or `Path=/` or sets `Domain` (browsers reject all of these) | a cookie lacks `HttpOnly` or `SameSite` |
 | `https-redirect` | the `http://` URL answers without ending up on `https://` after redirects | |
 
 If nothing answers on plain HTTP at all, `https-redirect` passes, since no content is served without TLS.
