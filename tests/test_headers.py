@@ -196,6 +196,18 @@ class HeaderChecksTest(unittest.TestCase):
         self.assertEqual(f.status, WARN)
         self.assertIn("Cross-Origin-Resource-Policy is missing", f.detail)
 
+    def test_coop_same_origin_allow_popups_does_not_warn(self):
+        # same-origin-allow-popups still severs a cross-origin opener's handle,
+        # so it is an acceptable COOP value (sites that open OAuth popups rely on
+        # it). With CORP set the check must pass and raise no COOP warning;
+        # guards against tightening the test to require exactly "same-origin".
+        f = headers.check_cross_origin_isolation({
+            "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
+            "Cross-Origin-Resource-Policy": "same-origin",
+        })
+        self.assertEqual(f.status, PASS)
+        self.assertNotIn("Cross-Origin-Opener-Policy", f.detail)
+
     def test_coop_report_to_parameter_is_ignored(self):
         f = headers.check_cross_origin_isolation({
             "Cross-Origin-Opener-Policy": 'same-origin; report-to="coop"',
