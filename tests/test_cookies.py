@@ -47,6 +47,13 @@ class CheckCookiesTest(unittest.TestCase):
         self.assertEqual(f.status, FAIL)
         self.assertIn("SameSite=None without Secure", f.detail)
 
+    def test_samesite_none_with_secure_passes(self):
+        # SameSite=None is legitimate and common for cross-site cookies (SSO,
+        # embeds) as long as Secure is set. The SameSite=None failure must stay
+        # gated on Secure being absent, so this canonical config must pass.
+        f = cookies.check_cookies(["sso=1; Secure; HttpOnly; SameSite=None"], is_https=True)
+        self.assertEqual(f.status, PASS)
+
     def test_worst_status_wins_and_every_cookie_is_listed(self):
         f = cookies.check_cookies(
             ["good=1; Secure; HttpOnly; SameSite=Strict", "a=1; Secure", "b=1; HttpOnly; SameSite=Lax"],
