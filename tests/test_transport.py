@@ -66,6 +66,16 @@ class StatusTest(unittest.TestCase):
         for status in (403, 429, 503):
             self.assertIn("bot protection", transport.check_status(status).detail, status)
 
+    def test_generic_server_error_warns_without_bot_protection_hint(self):
+        # The bot-protection hint is scoped to 403/429/503, not to 5xx as a
+        # whole: a 500 or 502 is a server fault, not a client being blocked.
+        # Guards against broadening the hint to every 5xx.
+        for status in (500, 502):
+            f = transport.check_status(status)
+            self.assertEqual(f.status, WARN, status)
+            self.assertIn("describe this error page", f.detail)
+            self.assertNotIn("bot protection", f.detail, status)
+
     def test_boundary_399_passes_and_400_warns(self):
         self.assertEqual(transport.check_status(399).status, PASS)
         self.assertEqual(transport.check_status(400).status, WARN)
