@@ -25,6 +25,7 @@ pip install ".[dns]"
 ```bash
 web-posture-check example.com
 web-posture-check https://example.com/login --json
+web-posture-check example.com --format markdown > report.md
 web-posture-check example.com --dkim-selector s1 --dkim-selector s2
 web-posture-check example.com --only tls-certificate,caa
 web-posture-check example.com --skip spf,dmarc,dkim
@@ -57,6 +58,10 @@ Target: https://example.com (HTTP 200)
   [WARN] dkim: only revoked keys (empty p=) under common selectors (google, selector1, selector2, k1, s1, s2, default, dkim, mail, cf2024-1); fine if example.com sends no mail, otherwise its active key uses another selector, which --dkim-selector can check
   [FAIL] https-redirect: http://example.com/ is served over plain HTTP without redirecting to HTTPS
 ```
+
+### Output formats
+
+`--format text` (the default) prints one line per finding. `--format json` (or `--json`) prints machine-readable output with `url`, `status` and `findings`. `--format markdown` prints a report for tickets, pull requests or emails: a heading with the URL, the HTTP status, when and with which version it was generated, a FAIL/WARN/PASS count, and a table with failures listed first.
 
 ### Choosing checks
 
