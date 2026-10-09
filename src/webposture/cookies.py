@@ -39,7 +39,9 @@ def _prefix_violations(name, attributes):
             violations.append("Secure")
         if attributes.get("path") != "/":
             violations.append("Path=/")
-        if "domain" in attributes:
+        # An empty Domain= is ignored by browsers (RFC 6265, section 5.2.3),
+        # so only a Domain with a value breaks the __Host- rule.
+        if attributes.get("domain"):
             violations.append("no Domain")
     elif lower.startswith("__secure-") and "secure" not in attributes:
         violations.append("Secure")

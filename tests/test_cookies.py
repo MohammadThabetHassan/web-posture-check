@@ -106,6 +106,13 @@ class CheckCookiesTest(unittest.TestCase):
         # The prefix message already covers Secure, so it is not repeated.
         self.assertNotIn("missing Secure", f.detail)
 
+    def test_host_prefix_with_empty_domain_passes(self):
+        # Browsers ignore an empty Domain attribute, so the cookie stays host-only.
+        for value in ("__Host-sid=1; Path=/; Domain=; Secure; HttpOnly; SameSite=Lax",
+                      "__Host-sid=1; Path=/; Domain; Secure; HttpOnly; SameSite=Lax"):
+            f = cookies.check_cookies([value], is_https=True)
+            self.assertEqual(f.status, PASS, value)
+
     def test_host_prefix_without_path_fails(self):
         f = cookies.check_cookies(["__Host-sid=1; Secure; HttpOnly; SameSite=Lax"], is_https=True)
         self.assertEqual(f.status, FAIL)
