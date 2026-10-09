@@ -4,19 +4,19 @@ import sys
 import urllib.error
 import urllib.request
 
-from . import __version__, cookies, headers, transport
-from .findings import FAIL
+from . import __version__, cookies, cors, headers, transport
+from .findings import FAIL, WARN, Finding
 
 USER_AGENT = f"web-posture-check/{__version__}"
 
 
-def fetch_headers(url, timeout):
+def fetch_headers(url, timeout, extra_headers=None):
     """Return (final URL, headers dict, list of Set-Cookie values).
 
     Set-Cookie is returned separately because a response can carry several,
     and folding headers into a dict keeps only one of them.
     """
-    request = urllib.request.Request(url, method="GET", headers={"User-Agent": USER_AGENT})
+    request = urllib.request.Request(url, method="GET", headers={"User-Agent": USER_AGENT, **(extra_headers or {})})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.geturl(), dict(response.headers.items()), response.headers.get_all("Set-Cookie") or []
@@ -55,6 +55,16 @@ def fetch_final_url(url, timeout):
         return recorder.last_url
 
 
+def probe_cors(url, timeout):
+    """Request url as if from a foreign origin and check what CORS allows."""
+    try:
+        _, probe_headers, _ = fetch_headers(url, timeout, {"Origin": cors.PROBE_ORIGIN})
+    except (urllib.error.URLError, OSError) as err:
+        return Finding("cors", WARN, f"could not run the CORS probe: {err}")
+    lowered = {k.lower(): v for k, v in probe_headers.items()}
+    return cors.check_cors(lowered.get("access-control-allow-origin"), lowered.get("access-control-allow-credentials"))
+
+
 def normalise_target(target):
     if "://" not in target:
         target = "https://" + target
@@ -64,7 +74,7 @@ def normalise_target(target):
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="web-posture-check",
-        description="Check a website's security posture (HTTP security headers and HTTPS redirect).",
+        description="Check a website's security posture (security headers, cookies, CORS and HTTPS redirect).",
     )
     parser.add_argument("target", help="domain or URL, e.g. example.com or https://example.com/login")
     parser.add_argument("--json", action="store_true", help="print findings as JSON")
@@ -81,6 +91,7 @@ def main(argv=None):
 
     findings = headers.run(response_headers)
     findings.append(cookies.check_cookies(set_cookies, final_url.startswith("https://")))
+    findings.append(probe_cors(final_url, args.timeout))
     http_url = transport.http_url_for(url)
     findings.append(transport.check_https_redirect(http_url, fetch_final_url(http_url, args.timeout)))
 
