@@ -1,5 +1,6 @@
 import argparse
 import json
+import ssl
 import sys
 import urllib.error
 import urllib.request
@@ -100,6 +101,14 @@ def main(argv=None):
     try:
         final_url, response_headers, set_cookies, status = fetch_headers(url, args.timeout)
     except (urllib.error.URLError, OSError) as err:
+        reason = getattr(err, "reason", err)
+        if isinstance(reason, ssl.SSLCertVerificationError):
+            # A broken certificate is itself the most important finding, so
+            # report it instead of aborting. Without a trusted connection there
+            # is no response to run the other checks on.
+            finding = tls.check_certificate(None, reason.verify_code, reason.verify_message, now=datetime.now(timezone.utc))
+            report(args, url, None, [finding], note="other checks skipped: no trusted HTTPS connection")
+            return 1
         print(f"error: could not fetch {url}: {err}", file=sys.stderr)
         return 2
 
@@ -112,14 +121,22 @@ def main(argv=None):
     http_url = transport.http_url_for(url)
     findings.append(transport.check_https_redirect(http_url, fetch_final_url(http_url, args.timeout)))
 
-    if args.json:
-        print(json.dumps({"url": final_url, "status": status, "findings": [f.to_dict() for f in findings]}, indent=2))
-    else:
-        print(f"Target: {final_url} (HTTP {status})")
-        for f in findings:
-            print(f"  [{f.status:4}] {f.check}: {f.detail}")
-
+    report(args, final_url, status, findings)
     return 1 if any(f.status == FAIL for f in findings) else 0
+
+
+def report(args, url, status, findings, note=None):
+    if args.json:
+        result = {"url": url, "status": status, "findings": [f.to_dict() for f in findings]}
+        if note:
+            result["note"] = note
+        print(json.dumps(result, indent=2))
+        return
+    print(f"Target: {url} ({f'HTTP {status}' if status is not None else 'no HTTP response'})")
+    for f in findings:
+        print(f"  [{f.status:4}] {f.check}: {f.detail}")
+    if note:
+        print(f"  ({note})")
 
 
 if __name__ == "__main__":

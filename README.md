@@ -48,10 +48,12 @@ Target: https://example.com (HTTP 200)
 | Code | Meaning |
 |------|---------|
 | 0 | No FAIL findings (WARN findings may exist) |
-| 1 | At least one FAIL finding |
-| 2 | The target could not be fetched |
+| 1 | At least one FAIL finding (including a broken certificate on the target) |
+| 2 | The target could not be reached (DNS failure, connection refused, timeout) |
 
 This makes it easy to use as a gate in CI.
+
+If the target's certificate is expired or not trusted, that is reported as a `tls-certificate` FAIL and the run exits with 1. The other checks are skipped, because there is no trusted connection to read the response from.
 
 ## Checks
 
@@ -69,7 +71,7 @@ This makes it easy to use as a gate in CI.
 | `information-leakage` | | `Server` includes a version number, or `X-Powered-By`, `X-AspNet-Version` or `X-AspNetMvc-Version` is present |
 | `cookies` | a cookie on an HTTPS response lacks `Secure`, any cookie sets `SameSite=None` without `Secure`, a `__Secure-` cookie lacks `Secure`, or a `__Host-` cookie lacks `Secure` or `Path=/` or sets `Domain` (browsers reject all of these) | a cookie lacks `HttpOnly` or `SameSite` |
 | `cors` | the response reflects any `Origin`, or allows `Origin: null`, together with `Access-Control-Allow-Credentials: true` | the response reflects any `Origin` without credentials, or sends `*` with credentials (browsers reject that combination) |
-| `tls-certificate` | the certificate has expired | it expires within 14 days (renewal tooling normally renews 30 days ahead, so this usually means renewal is failing), or it could not be verified for another reason, in which case expiry is not checked |
+| `tls-certificate` | the certificate has expired, or is not trusted (wrong host, self-signed, untrusted chain, not yet valid) | it expires within 14 days (renewal tooling normally renews 30 days ahead, so this usually means renewal is failing) |
 | `https-redirect` | the `http://` URL answers without ending up on `https://` after redirects | |
 
 If nothing answers on plain HTTP at all, `https-redirect` passes, since no content is served without TLS.
