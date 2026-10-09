@@ -90,6 +90,15 @@ class HeaderChecksTest(unittest.TestCase):
         f = headers.check_csp({"Content-Security-Policy": "default-src 'self' 'unsafe-inline'; script-src 'self'"})
         self.assertEqual(f.status, PASS)
 
+    def test_csp_duplicate_script_src_uses_first_occurrence(self):
+        # Browsers honour the first occurrence of a directive and ignore later
+        # duplicates, so a later safe script-src must not mask an earlier unsafe
+        # one. Guards against a last-wins regression that would be a silent
+        # false negative on a real XSS exposure.
+        f = headers.check_csp({"Content-Security-Policy": "script-src 'unsafe-inline'; script-src 'self'"})
+        self.assertEqual(f.status, WARN)
+        self.assertIn("'unsafe-inline'", f.detail)
+
     def test_csp_unsafe_eval_warns_even_with_nonce(self):
         f = headers.check_csp({"Content-Security-Policy": "script-src 'nonce-abc123' 'unsafe-eval'"})
         self.assertEqual(f.status, WARN)
