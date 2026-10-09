@@ -1,7 +1,9 @@
 import argparse
 import json
+import socket
 import ssl
 import sys
+import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -194,6 +196,8 @@ def main(argv=None):
     output.add_argument("--json", action="store_const", const="json", dest="format",
                         help="same as --format json")
     parser.add_argument("--timeout", type=float, default=10.0, help="request timeout in seconds (default 10)")
+    parser.add_argument("--retries", type=int, default=1, choices=range(0, 6), metavar="N",
+                        help="retry a target's first request up to N times after a timeout or dropped connection (default 1, max 5)")
     parser.add_argument("--fail-on", choices=("fail", "warn"), default="fail",
                         help="exit 1 on any FAIL (default), or with 'warn' on any WARN or FAIL")
     parser.add_argument("--dkim-selector", action="append", metavar="SELECTOR",
@@ -226,6 +230,42 @@ def main(argv=None):
     return max(codes)
 
 
+def _reason(err):
+    return getattr(err, "reason", err)
+
+
+def is_transient(err):
+    """Timeouts and dropped connections often succeed on a second try; DNS and TLS errors do not."""
+    reason = _reason(err)
+    return isinstance(reason, (socket.timeout, TimeoutError, ConnectionResetError, ConnectionAbortedError))
+
+
+def fetch_with_retries(url, timeout, retries):
+    """fetch_headers, retried up to `retries` more times after a transient failure."""
+    for attempt in range(retries + 1):
+        try:
+            return fetch_headers(url, timeout)
+        except (urllib.error.URLError, OSError) as err:
+            if attempt == retries or not is_transient(err):
+                raise
+            time.sleep(RETRY_DELAY_SECONDS)
+
+
+# A short pause gives a rate limiter or a busy server a moment before the retry.
+RETRY_DELAY_SECONDS = 1.0
+
+
+def describe_fetch_error(url, err, timeout, attempts):
+    """A plain-language reason for why the target could not be fetched."""
+    reason = _reason(err)
+    tries = f"{attempts} attempt{'s' if attempts != 1 else ''}"
+    if isinstance(reason, (socket.timeout, TimeoutError)):
+        return f"{url} did not respond within {timeout:g}s ({tries}); the site may be down or slow, try a larger --timeout"
+    if isinstance(reason, (ConnectionResetError, ConnectionAbortedError)):
+        return f"{url} closed the connection ({tries}); this is often rate limiting or a firewall"
+    return f"could not fetch {url}: {reason}"
+
+
 def scan(target, args):
     """Run the selected checks on one target. Returns (result or None, exit code)."""
 
@@ -236,7 +276,7 @@ def scan(target, args):
 
     url = normalise_target(target)
     try:
-        final_url, response_headers, set_cookies, status = fetch_headers(url, args.timeout)
+        final_url, response_headers, set_cookies, status = fetch_with_retries(url, args.timeout, args.retries)
     except (urllib.error.URLError, OSError) as err:
         reason = getattr(err, "reason", err)
         if isinstance(reason, ssl.SSLCertVerificationError):
@@ -246,7 +286,7 @@ def scan(target, args):
             finding = tls.check_certificate(None, reason.verify_code, reason.verify_message, now=datetime.now(timezone.utc))
             return {"url": url, "status": None, "findings": [finding],
                     "note": "other checks skipped: no trusted HTTPS connection"}, 1
-        print(f"error: could not fetch {url}: {err}", file=sys.stderr)
+        print(f"error: {describe_fetch_error(url, err, args.timeout, args.retries + 1)}", file=sys.stderr)
         return None, 2
 
     # Checks that need their own requests are wrapped in lambdas, so a check

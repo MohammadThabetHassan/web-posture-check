@@ -288,5 +288,57 @@ class FailOnTest(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 2)
 
 
+class RetryTest(unittest.TestCase):
+    """Transient failures are retried and explained. No network, no real sleeping."""
+
+    OK = ("https://example.com/", {"Strict-Transport-Security": "max-age=31536000"}, [], 200)
+
+    def setUp(self):
+        sleep = mock.patch.object(cli.time, "sleep")
+        self.sleep = sleep.start()
+        self.addCleanup(sleep.stop)
+
+    def _run(self, side_effect, *argv):
+        fetch = mock.Mock(side_effect=side_effect)
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(cli, "fetch_headers", fetch), redirect_stdout(out), mock.patch("sys.stderr", err):
+            code = cli.main(["example.com", "--only", "hsts", *argv])
+        return code, fetch.call_count, err.getvalue()
+
+    def test_timeout_then_success_is_retried_once(self):
+        code, calls, err = self._run([urllib.error.URLError(TimeoutError("timed out")), self.OK])
+        self.assertEqual((code, calls), (0, 2))
+        self.assertEqual(err, "")
+        self.sleep.assert_called_once_with(cli.RETRY_DELAY_SECONDS)
+
+    def test_connection_reset_is_retried(self):
+        code, calls, _ = self._run([urllib.error.URLError(ConnectionResetError(10054, "forcibly closed")), self.OK])
+        self.assertEqual((code, calls), (0, 2))
+
+    def test_persistent_timeout_gives_a_clear_message_and_exit_2(self):
+        code, calls, err = self._run(urllib.error.URLError(TimeoutError("timed out")), "--timeout", "3", "--retries", "2")
+        self.assertEqual((code, calls), (2, 3))
+        self.assertIn("did not respond within 3s (3 attempts)", err)
+        self.assertIn("try a larger --timeout", err)
+
+    def test_retries_0_tries_once(self):
+        code, calls, err = self._run(urllib.error.URLError(ConnectionResetError()), "--retries", "0")
+        self.assertEqual((code, calls), (2, 1))
+        self.assertIn("closed the connection (1 attempt)", err)
+
+    def test_dns_and_certificate_errors_are_not_retried(self):
+        _, calls, err = self._run(urllib.error.URLError(OSError("Name or service not known")))
+        self.assertEqual(calls, 1)
+        self.assertIn("could not fetch https://example.com: Name or service not known", err)
+        _, calls, _ = self._run(_cert_error(10, "certificate has expired"))
+        self.assertEqual(calls, 1)
+        self.sleep.assert_not_called()
+
+    def test_retries_must_be_between_0_and_5(self):
+        with mock.patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit) as ctx:
+            cli.main(["example.com", "--retries", "9"])
+        self.assertEqual(ctx.exception.code, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

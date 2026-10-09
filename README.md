@@ -61,6 +61,10 @@ Score: 55/100 (grade F)
   [FAIL] https-redirect: http://example.com/ is served over plain HTTP without redirecting to HTTPS
 ```
 
+### Timeouts and retries
+
+`--timeout` (default 10 seconds) applies to each request. If a target's first request times out or the connection is dropped, it is retried after a one-second pause, once by default; `--retries N` sets this from 0 to 5. DNS failures and certificate errors are not retried, since a second try would give the same answer. When a target still cannot be reached, the error says why in plain words, for example `https://example.com did not respond within 10s (2 attempts); the site may be down or slow, try a larger --timeout`.
+
 ### Multiple targets
 
 Give several targets, and/or `--targets-file FILE` with one target per line (blank lines and lines starting with `#` are ignored). Each target is scanned in turn and reported on its own. A target that cannot be reached is reported on stderr and the others still run. The exit code is the worst one across all targets: 2 if any target was unreachable, otherwise 1 if any FAIL, otherwise 0. With `--format json`, several targets give `{"results": [...]}` with one object per reachable target. A single target keeps the plain object shown below.
