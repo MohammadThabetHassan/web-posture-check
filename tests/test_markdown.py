@@ -42,6 +42,13 @@ class RenderTest(unittest.TestCase):
         self.assertIn("no HTTP response, generated", out)
         self.assertIn("> other checks skipped: no trusted HTTPS connection", out)
 
+    def test_report_template_stays_ascii(self):
+        # The report must be plain ASCII apart from the findings themselves, so
+        # it survives non-UTF-8 consoles and files on Windows (an early version
+        # used a non-ASCII separator that was written as "?"). With ASCII
+        # findings and URL, the whole report must encode as ASCII.
+        self.assertTrue(render().isascii())
+
 
 class FormatOptionTest(unittest.TestCase):
     def _run(self, *argv):
