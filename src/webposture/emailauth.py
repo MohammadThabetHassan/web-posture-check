@@ -6,7 +6,7 @@ is reported as skipped. The check_* functions take the TXT strings and need no
 network access.
 """
 
-from .findings import Finding, PASS, WARN, FAIL
+from .findings import Finding, PASS, WARN, FAIL, SKIPPED_PREFIX
 
 INSTALL_HINT = 'install the optional DNS support with: pip install "web-posture-check[dns]"'
 
@@ -52,7 +52,7 @@ def lookup_txt(domain, timeout):
         import dns.exception
         import dns.resolver
     except ImportError:
-        return None, f"skipped: {INSTALL_HINT}"
+        return None, f"{SKIPPED_PREFIX} {INSTALL_HINT}"
     try:
         answer = dns.resolver.resolve(domain, "TXT", lifetime=timeout)
     except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):

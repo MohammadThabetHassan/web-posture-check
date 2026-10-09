@@ -4,6 +4,10 @@ PASS = "PASS"
 WARN = "WARN"
 FAIL = "FAIL"
 
+# Detail prefix for a check that could not run (e.g. a missing optional
+# dependency). Such findings are shown but not scored.
+SKIPPED_PREFIX = "skipped:"
+
 
 @dataclass
 class Finding:

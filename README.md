@@ -37,6 +37,7 @@ Example output:
 
 ```
 Target: https://example.com (HTTP 200)
+Score: 55/100 (grade F)
   [PASS] http-status: final response is HTTP 200
   [FAIL] hsts: Strict-Transport-Security header is missing
   [FAIL] csp: Content-Security-Policy header is missing
@@ -62,6 +63,17 @@ Target: https://example.com (HTTP 200)
 ### Output formats
 
 `--format text` (the default) prints one line per finding. `--format json` (or `--json`) prints machine-readable output with `url`, `status` and `findings`. `--format markdown` prints a report for tickets, pull requests or emails: a heading with the URL, the HTTP status, when and with which version it was generated, a FAIL/WARN/PASS count, and a table with failures listed first.
+
+### Score and grade
+
+Every report includes an overall score and letter grade, e.g. `Score: 92/100 (grade A)`:
+
+- Each check counts 1 for PASS, 0.5 for WARN and 0 for FAIL, and the score is the average scaled to 100. It works the same for any `--only`/`--skip` selection.
+- Grade A is 90 and above, B 80 to 89, C 70 to 79, D 60 to 69, and F below 60.
+- A needs zero FAILs. A run with any FAIL is capped at B, so one serious problem cannot hide behind many passes.
+- Checks reported as skipped (for example the DNS checks without the optional extra) are shown but not scored.
+
+JSON output has top-level `score` and `grade` fields, and the Markdown summary starts with the grade.
 
 ### Choosing checks
 
