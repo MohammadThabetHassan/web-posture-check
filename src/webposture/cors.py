@@ -15,7 +15,9 @@ def check_cors(allow_origin, allow_credentials, probe_origin=PROBE_ORIGIN):
     if allow_origin is None:
         return Finding("cors", PASS, "no Access-Control-Allow-Origin for a foreign origin")
     origin = allow_origin.strip()
-    credentials = (allow_credentials or "").strip().lower() == "true"
+    # The Fetch standard enables credentials only for the exact, case-sensitive
+    # value "true" (surrounding whitespace is trimmed), so "TRUE" does not count.
+    credentials = (allow_credentials or "").strip() == "true"
     if origin == probe_origin:
         if credentials:
             return Finding("cors", FAIL, "reflects any Origin with credentials allowed: any website can read authenticated responses")

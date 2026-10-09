@@ -21,8 +21,10 @@ class CheckCorsTest(unittest.TestCase):
     def test_reflected_origin_without_credentials_warns(self):
         self.assertEqual(cors.check_cors(PROBE, None).status, WARN)
 
-    def test_credentials_value_is_case_insensitive(self):
-        self.assertEqual(cors.check_cors(PROBE, "TRUE").status, FAIL)
+    def test_credentials_value_is_case_sensitive(self):
+        # Browsers ignore "TRUE": credentials stay off, so this is only a WARN.
+        self.assertEqual(cors.check_cors(PROBE, "TRUE").status, WARN)
+        self.assertEqual(cors.check_cors(PROBE, " true ").status, FAIL)
 
     def test_credentials_only_true_escalates_to_fail(self):
         # Browsers enable credentials only on the exact value "true", so a
