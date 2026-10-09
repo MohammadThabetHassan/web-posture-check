@@ -334,6 +334,12 @@ class RetryTest(unittest.TestCase):
         self.assertEqual(calls, 1)
         self.sleep.assert_not_called()
 
+    def test_connection_aborted_is_retried(self):
+        # ConnectionAbortedError (WinError 10053) is listed as transient next to
+        # ConnectionResetError but was untested; it must be retried too.
+        code, calls, _ = self._run([urllib.error.URLError(ConnectionAbortedError(10053, "aborted")), self.OK])
+        self.assertEqual((code, calls), (0, 2))
+
     def test_retries_must_be_between_0_and_5(self):
         with mock.patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit) as ctx:
             cli.main(["example.com", "--retries", "9"])
