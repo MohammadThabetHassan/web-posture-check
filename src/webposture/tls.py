@@ -47,5 +47,7 @@ def check_certificate(not_after, verify_code, verify_message, now):
     if days < 0:
         return Finding("tls-certificate", FAIL, f"certificate expired on {date}")
     if days < EXPIRY_WARN_DAYS:
-        return Finding("tls-certificate", WARN, f"certificate expires in {int(days)} day(s), on {date}; check that renewal is working")
+        # Under a day, "in 0 day(s)" reads like a bug on the most urgent warning.
+        when = "in less than a day" if days < 1 else f"in {int(days)} day(s)"
+        return Finding("tls-certificate", WARN, f"certificate expires {when}, on {date}; check that renewal is working")
     return Finding("tls-certificate", PASS, f"certificate valid until {date} ({int(days)} days)")

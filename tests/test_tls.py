@@ -18,6 +18,14 @@ class CheckCertificateTest(unittest.TestCase):
         self.assertEqual(f.status, WARN)
         self.assertIn("expires in 5 day(s)", f.detail)
 
+    def test_expiring_within_a_day_reads_clearly(self):
+        # A certificate with hours left is still valid but the most urgent case.
+        # "expires in 0 day(s)" reads like a bug, so under a day it says so plainly.
+        f = tls.check_certificate(NOW + timedelta(hours=12), None, None, NOW)
+        self.assertEqual(f.status, WARN)
+        self.assertIn("expires in less than a day", f.detail)
+        self.assertNotIn("0 day(s)", f.detail)
+
     def test_boundary_14_days_passes_and_just_under_warns(self):
         self.assertEqual(tls.check_certificate(NOW + timedelta(days=14), None, None, NOW).status, PASS)
         self.assertEqual(tls.check_certificate(NOW + timedelta(days=13, hours=23), None, None, NOW).status, WARN)
