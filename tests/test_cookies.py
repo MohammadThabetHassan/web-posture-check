@@ -86,6 +86,14 @@ class CheckCookiesTest(unittest.TestCase):
         f = cookies.check_cookies(["__Host-sid=1; Path=/; Secure; HttpOnly; SameSite=Lax"], is_https=True)
         self.assertEqual(f.status, PASS)
 
+    def test_valid_prefix_still_gets_flag_review(self):
+        # A valid prefix does not exempt a cookie from the ordinary flag review:
+        # this __Host- cookie satisfies the prefix rules but is missing HttpOnly,
+        # so it must still warn (cf. the live __Host-GAPS / __Secure-STRP cases).
+        f = cookies.check_cookies(["__Host-sid=1; Path=/; Secure; SameSite=Lax"], is_https=True)
+        self.assertEqual(f.status, WARN)
+        self.assertIn("missing HttpOnly", f.detail)
+
     def test_host_prefix_with_domain_fails(self):
         f = cookies.check_cookies(["__Host-sid=1; Path=/; Domain=example.com; Secure; HttpOnly; SameSite=Lax"], is_https=True)
         self.assertEqual(f.status, FAIL)
