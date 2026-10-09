@@ -7,7 +7,7 @@ import urllib.request
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
-from . import __version__, cookies, cors, headers, tls, transport
+from . import __version__, cookies, cors, headers, securitytxt, tls, transport
 from .findings import FAIL, WARN, Finding
 
 USER_AGENT = f"web-posture-check/{__version__}"
@@ -88,6 +88,23 @@ def check_legacy_tls(url, timeout):
     return tls.check_legacy_protocols(tls.probe_legacy_protocols(parts.hostname, parts.port or 443, timeout))
 
 
+def check_security_txt(url, timeout):
+    """Fetch /.well-known/security.txt from the final URL's origin and check it."""
+    parts = urlsplit(url)
+    txt_url = f"{parts.scheme}://{parts.netloc}{securitytxt.PATH}"
+    request = urllib.request.Request(txt_url, method="GET", headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            # A real security.txt is a few KB; cap the read so a huge page cannot stall the run.
+            body = response.read(64 * 1024).decode("utf-8", errors="replace")
+            status, content_type = response.status, response.headers.get("Content-Type")
+    except urllib.error.HTTPError as err:
+        status, content_type, body = err.code, err.headers.get("Content-Type"), ""
+    except (urllib.error.URLError, OSError):
+        status, content_type, body = None, None, ""
+    return securitytxt.check_security_txt(status, content_type, body, now=datetime.now(timezone.utc))
+
+
 def normalise_target(target):
     if "://" not in target:
         target = "https://" + target
@@ -127,6 +144,7 @@ def main(argv=None):
     findings.append(probe_cors(final_url, args.timeout))
     findings.append(check_tls(final_url, args.timeout))
     findings.append(check_legacy_tls(final_url, args.timeout))
+    findings.append(check_security_txt(final_url, args.timeout))
     http_url = transport.http_url_for(url)
     findings.append(transport.check_https_redirect(http_url, fetch_final_url(http_url, args.timeout)))
 
