@@ -171,13 +171,23 @@ def parse_check_names(value):
     return names
 
 
+def read_targets_file(path):
+    """One target per line; blank lines and lines starting with # are ignored."""
+    with open(path, encoding="utf-8") as handle:
+        lines = [line.strip() for line in handle]
+    return [line for line in lines if line and not line.startswith("#")]
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="web-posture-check",
         description="Check a website's security posture: security headers, cookies, CORS, TLS, "
                     "security.txt, DNS (CAA, SPF, DMARC, DKIM) and the HTTPS redirect.",
     )
-    parser.add_argument("target", help="domain or URL, e.g. example.com or https://example.com/login")
+    parser.add_argument("targets", nargs="*", metavar="target",
+                        help="domain or URL, e.g. example.com or https://example.com/login (several allowed)")
+    parser.add_argument("--targets-file", metavar="FILE",
+                        help="read more targets from FILE, one per line (# starts a comment)")
     output = parser.add_mutually_exclusive_group()
     output.add_argument("--format", choices=("text", "json", "markdown"), default="text",
                         help="output format (default text); markdown is a table for tickets and pull requests")
@@ -194,12 +204,35 @@ def main(argv=None):
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     args = parser.parse_args(argv)
 
+    targets = list(args.targets)
+    if args.targets_file:
+        try:
+            targets += read_targets_file(args.targets_file)
+        except OSError as err:
+            parser.error(f"could not read --targets-file: {err}")
+    if not targets:
+        parser.error("give at least one target, or --targets-file")
+
+    results, codes = [], []
+    for target in targets:
+        result, code = scan(target, args)
+        codes.append(code)
+        if result is not None:
+            results.append(result)
+    report(args, results, single=len(targets) == 1)
+    # The worst outcome wins: 2 (a target could not be reached) over 1 (a FAIL) over 0.
+    return max(codes)
+
+
+def scan(target, args):
+    """Run the selected checks on one target. Returns (result or None, exit code)."""
+
     def wanted(name):
         if args.only is not None:
             return name in args.only
         return args.skip is None or name not in args.skip
 
-    url = normalise_target(args.target)
+    url = normalise_target(target)
     try:
         final_url, response_headers, set_cookies, status = fetch_headers(url, args.timeout)
     except (urllib.error.URLError, OSError) as err:
@@ -209,10 +242,10 @@ def main(argv=None):
             # report it instead of aborting. Without a trusted connection there
             # is no response to run the other checks on.
             finding = tls.check_certificate(None, reason.verify_code, reason.verify_message, now=datetime.now(timezone.utc))
-            report(args, url, None, [finding], note="other checks skipped: no trusted HTTPS connection")
-            return 1
+            return {"url": url, "status": None, "findings": [finding],
+                    "note": "other checks skipped: no trusted HTTPS connection"}, 1
         print(f"error: could not fetch {url}: {err}", file=sys.stderr)
-        return 2
+        return None, 2
 
     # Checks that need their own requests are wrapped in lambdas, so a check
     # left out with --only/--skip never touches the network.
@@ -233,32 +266,48 @@ def main(argv=None):
     findings = [transport.check_status(status)] if wanted("http-status") else []
     findings += [f for f in headers.run(response_headers) if wanted(f.check)]
     findings += [run() for name, run in later if wanted(name)]
+    code = 1 if any(f.status == FAIL for f in findings) else 0
+    return {"url": final_url, "status": status, "findings": findings, "note": None}, code
 
-    report(args, final_url, status, findings)
-    return 1 if any(f.status == FAIL for f in findings) else 0
+
+def to_json(result):
+    data = {"url": result["url"], "status": result["status"], "findings": [f.to_dict() for f in result["findings"]]}
+    result_score = score.compute(result["findings"])
+    if result_score:
+        data["score"], data["grade"] = result_score
+    if result["note"]:
+        data["note"] = result["note"]
+    return data
 
 
-def report(args, url, status, findings, note=None):
-    result_score = score.compute(findings)
+def to_text(result):
+    status = result["status"]
+    lines = [f"Target: {result['url']} ({f'HTTP {status}' if status is not None else 'no HTTP response'})"]
+    result_score = score.compute(result["findings"])
+    if result_score:
+        lines.append(f"Score: {result_score[0]}/100 (grade {result_score[1]})")
+    lines += [f"  [{f.status:4}] {f.check}: {f.detail}" for f in result["findings"]]
+    if result["note"]:
+        lines.append(f"  ({result['note']})")
+    return "\n".join(lines)
+
+
+def report(args, results, single):
+    """Print every result. With one target the output is exactly as before."""
     if args.format == "json":
-        result = {"url": url, "status": status, "findings": [f.to_dict() for f in findings]}
-        if result_score:
-            result["score"], result["grade"] = result_score
-        if note:
-            result["note"] = note
-        print(json.dumps(result, indent=2))
+        if single:
+            if results:
+                print(json.dumps(to_json(results[0]), indent=2))
+        else:
+            print(json.dumps({"results": [to_json(r) for r in results]}, indent=2))
         return
     if args.format == "markdown":
-        print(markdown.render(url, status, findings, __version__, datetime.now(timezone.utc), note=note,
-                              score=result_score), end="")
+        now = datetime.now(timezone.utc)
+        print("\n".join(markdown.render(r["url"], r["status"], r["findings"], __version__, now, note=r["note"],
+                                         score=score.compute(r["findings"])) for r in results), end="")
         return
-    print(f"Target: {url} ({f'HTTP {status}' if status is not None else 'no HTTP response'})")
-    if result_score:
-        print(f"Score: {result_score[0]}/100 (grade {result_score[1]})")
-    for f in findings:
-        print(f"  [{f.status:4}] {f.check}: {f.detail}")
-    if note:
-        print(f"  ({note})")
+    if results:
+        print("\n\n".join(to_text(r) for r in results))
 
 
 if __name__ == "__main__":

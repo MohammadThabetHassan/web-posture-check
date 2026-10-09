@@ -1,6 +1,8 @@
 import io
 import json
+import os
 import ssl
+import tempfile
 import unittest
 import urllib.error
 from contextlib import redirect_stdout
@@ -171,6 +173,77 @@ class ScoreOutputTest(unittest.TestCase):
         self.assertEqual(result["score"], 50)
         self.assertEqual(result["grade"], "F")
         self.assertEqual(code, 1)
+
+
+class MultipleTargetsTest(unittest.TestCase):
+    """Several targets in one run. Fetches are mocked; no network needed."""
+
+    # hsts passes on good.example, fails on bad.example; down.example is unreachable.
+    RESPONSES = {
+        "https://good.example": ("https://good.example/", {"Strict-Transport-Security": "max-age=31536000"}, [], 200),
+        "https://bad.example": ("https://bad.example/", {}, [], 200),
+    }
+
+    def _fetch(self, url, timeout, extra_headers=None):
+        if url not in self.RESPONSES:
+            raise urllib.error.URLError(OSError("Name or service not known"))
+        return self.RESPONSES[url]
+
+    def _run(self, *argv):
+        out = io.StringIO()
+        with mock.patch.object(cli, "fetch_headers", side_effect=self._fetch), redirect_stdout(out), \
+                mock.patch("sys.stderr", new_callable=io.StringIO):
+            code = cli.main([*argv, "--only", "hsts"])
+        return code, out.getvalue()
+
+    def test_json_lists_every_reachable_target(self):
+        code, out = self._run("good.example", "bad.example", "--json")
+        results = json.loads(out)["results"]
+        self.assertEqual([r["url"] for r in results], ["https://good.example/", "https://bad.example/"])
+        self.assertEqual([r["findings"][0]["status"] for r in results], ["PASS", "FAIL"])
+        self.assertEqual(code, 1)
+
+    def test_single_target_json_shape_is_unchanged(self):
+        _, out = self._run("good.example", "--json")
+        self.assertNotIn("results", json.loads(out))
+
+    def test_markdown_prints_one_report_per_target(self):
+        # Markdown has no "results" wrapper like JSON, so each target must get
+        # its own full report. Guards against only the first target rendering.
+        _, out = self._run("good.example", "bad.example", "--format", "markdown")
+        self.assertEqual(out.count("## Web posture report:"), 2)
+        self.assertIn("## Web posture report: https://good.example/", out)
+        self.assertIn("## Web posture report: https://bad.example/", out)
+
+    def test_worst_exit_code_wins_and_other_targets_still_run(self):
+        code, out = self._run("good.example", "down.example", "bad.example")
+        self.assertEqual(code, 2)
+        self.assertIn("Target: https://good.example/", out)
+        self.assertIn("Target: https://bad.example/", out)
+
+    def test_all_passing_targets_exit_0(self):
+        self.assertEqual(self._run("good.example", "good.example")[0], 0)
+
+    def test_targets_file_skips_blanks_and_comments_and_adds_to_arguments(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "sites.txt")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("# client sites\nbad.example\n\n  good.example  \n")
+            _, out = self._run("good.example", "--targets-file", path, "--json")
+        self.assertEqual([r["url"] for r in json.loads(out)["results"]],
+                         ["https://good.example/", "https://bad.example/", "https://good.example/"])
+
+    def test_no_targets_is_a_usage_error(self):
+        with mock.patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit) as ctx:
+            cli.main([])
+        self.assertEqual(ctx.exception.code, 2)
+
+    def test_missing_targets_file_is_a_usage_error(self):
+        err = io.StringIO()
+        with mock.patch("sys.stderr", err), self.assertRaises(SystemExit) as ctx:
+            cli.main(["--targets-file", "does-not-exist.txt"])
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertIn("could not read --targets-file", err.getvalue())
 
 
 if __name__ == "__main__":

@@ -26,6 +26,7 @@ pip install ".[dns]"
 web-posture-check example.com
 web-posture-check https://example.com/login --json
 web-posture-check example.com --format markdown > report.md
+web-posture-check site-one.com site-two.com --targets-file clients.txt
 web-posture-check example.com --dkim-selector s1 --dkim-selector s2
 web-posture-check example.com --only tls-certificate,caa
 web-posture-check example.com --skip spf,dmarc,dkim
@@ -60,6 +61,10 @@ Score: 55/100 (grade F)
   [FAIL] https-redirect: http://example.com/ is served over plain HTTP without redirecting to HTTPS
 ```
 
+### Multiple targets
+
+Give several targets, and/or `--targets-file FILE` with one target per line (blank lines and lines starting with `#` are ignored). Each target is scanned in turn and reported on its own. A target that cannot be reached is reported on stderr and the others still run. The exit code is the worst one across all targets: 2 if any target was unreachable, otherwise 1 if any FAIL, otherwise 0. With `--format json`, several targets give `{"results": [...]}` with one object per reachable target. A single target keeps the plain object shown below.
+
 ### Output formats
 
 `--format text` (the default) prints one line per finding. `--format json` (or `--json`) prints machine-readable output with `url`, `status` and `findings`. `--format markdown` prints a report for tickets, pull requests or emails: a heading with the URL, the HTTP status, when and with which version it was generated, a FAIL/WARN/PASS count, and a table with failures listed first.
@@ -85,7 +90,7 @@ JSON output has top-level `score` and `grade` fields, and the Markdown summary s
 |------|---------|
 | 0 | No FAIL findings (WARN findings may exist) |
 | 1 | At least one FAIL finding (including a broken certificate on the target) |
-| 2 | The target could not be reached (DNS failure, connection refused, timeout) |
+| 2 | A target could not be reached (DNS failure, connection refused, timeout) |
 
 This makes it easy to use as a gate in CI.
 
