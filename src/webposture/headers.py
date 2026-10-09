@@ -10,6 +10,7 @@ from .findings import Finding, PASS, WARN, FAIL
 
 # Six months: the common scanner baseline. The HSTS preload list requires one year.
 HSTS_MIN_MAX_AGE = 15552000
+HSTS_PRELOAD_MIN_MAX_AGE = 31536000
 
 
 def _get(headers, name):
@@ -27,9 +28,23 @@ def check_hsts(headers):
     if not match:
         return Finding("hsts", FAIL, "Strict-Transport-Security has no valid max-age")
     max_age = int(match.group(1))
+    directives = {d.strip().lower() for d in value.split(";")}
+    subdomains = "includesubdomains" in directives
+    preload = "preload" in directives
+    detail = f"max-age={max_age}" + ("; includeSubDomains" if subdomains else "") + ("; preload" if preload else "")
     if max_age < HSTS_MIN_MAX_AGE:
         return Finding("hsts", WARN, f"max-age={max_age} is below {HSTS_MIN_MAX_AGE} (6 months)")
-    return Finding("hsts", PASS, f"max-age={max_age}")
+    if preload:
+        # The preload list (hstspreload.org) rejects sites that ask for preload
+        # without meeting its requirements, so the directive does nothing.
+        missing = []
+        if max_age < HSTS_PRELOAD_MIN_MAX_AGE:
+            missing.append(f"max-age of at least {HSTS_PRELOAD_MIN_MAX_AGE} (1 year)")
+        if not subdomains:
+            missing.append("includeSubDomains")
+        if missing:
+            return Finding("hsts", WARN, f"{detail}: preload is set but the preload list also requires " + " and ".join(missing))
+    return Finding("hsts", PASS, detail)
 
 
 def check_csp(headers):

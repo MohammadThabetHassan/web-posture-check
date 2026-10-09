@@ -37,6 +37,25 @@ class HeaderChecksTest(unittest.TestCase):
         f = headers.check_hsts({"Strict-Transport-Security": "includeSubDomains"})
         self.assertEqual(f.status, FAIL)
 
+    def test_hsts_detail_reports_directives(self):
+        f = headers.check_hsts({"Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload"})
+        self.assertEqual(f.status, PASS)
+        self.assertEqual(f.detail, "max-age=63072000; includeSubDomains; preload")
+
+    def test_hsts_preload_without_include_subdomains_warns(self):
+        f = headers.check_hsts({"Strict-Transport-Security": "max-age=31536000; preload"})
+        self.assertEqual(f.status, WARN)
+        self.assertIn("includeSubDomains", f.detail)
+
+    def test_hsts_preload_with_short_max_age_warns(self):
+        f = headers.check_hsts({"Strict-Transport-Security": "max-age=15552000; includeSubDomains; preload"})
+        self.assertEqual(f.status, WARN)
+        self.assertIn("1 year", f.detail)
+
+    def test_hsts_directives_are_case_insensitive(self):
+        f = headers.check_hsts({"Strict-Transport-Security": "MAX-AGE=31536000; INCLUDESUBDOMAINS; PRELOAD"})
+        self.assertEqual(f.status, PASS)
+
     def test_report_only_csp_warns(self):
         f = headers.check_csp({"Content-Security-Policy-Report-Only": "default-src 'self'"})
         self.assertEqual(f.status, WARN)
