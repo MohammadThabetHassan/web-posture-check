@@ -165,6 +165,17 @@ class HeaderChecksTest(unittest.TestCase):
         f = headers.check_information_leakage({"X-Powered-By": "Express"})
         self.assertEqual(f.status, WARN)
 
+    def test_information_leakage_is_warn_only_and_keeps_exit_code(self):
+        # The check is WARN-only by design so it never changes the exit code.
+        # Run it through the full pipeline on an otherwise-secure response that
+        # only leaks a server version: information-leakage must warn, and no
+        # finding may be FAIL, since cli returns 1 only when something fails.
+        leaking = dict(GOOD, Server="nginx/1.18.0")
+        results = headers.run(leaking)
+        leak = next(f for f in results if f.check == "information-leakage")
+        self.assertEqual(leak.status, WARN)
+        self.assertFalse(any(f.status == FAIL for f in results))
+
     def test_x_frame_options_accepted_without_csp(self):
         f = headers.check_framing({"X-Frame-Options": "sameorigin"})
         self.assertEqual(f.status, PASS)
