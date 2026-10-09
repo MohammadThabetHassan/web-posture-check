@@ -2,7 +2,7 @@
 
 A small command-line tool that checks a website's security posture and tells you what to fix. It has no third-party dependencies.
 
-It checks HTTP security headers and that plain HTTP redirects to HTTPS. TLS, email authentication (SPF, DKIM, DMARC), cookie flags and more are on the roadmap.
+It checks HTTP security headers, cookie flags, and that plain HTTP redirects to HTTPS. TLS, email authentication (SPF, DKIM, DMARC) and more are on the roadmap.
 
 ## Install
 
@@ -34,6 +34,7 @@ Target: https://example.com
   [WARN] referrer-policy: Referrer-Policy header is missing (browser default applies)
   [WARN] permissions-policy: Permissions-Policy header is missing
   [PASS] information-leakage: no server version or stack headers
+  [PASS] cookies: no cookies set
   [FAIL] https-redirect: http://example.com/ is served over plain HTTP without redirecting to HTTPS
 ```
 
@@ -58,9 +59,12 @@ This makes it easy to use as a gate in CI.
 | `referrer-policy` | set to `unsafe-url` | missing |
 | `permissions-policy` | | missing |
 | `information-leakage` | | `Server` includes a version number, or `X-Powered-By`, `X-AspNet-Version` or `X-AspNetMvc-Version` is present |
+| `cookies` | a cookie on an HTTPS response lacks `Secure`, or any cookie sets `SameSite=None` without `Secure` (browsers reject it) | a cookie lacks `HttpOnly` or `SameSite` |
 | `https-redirect` | the `http://` URL answers without ending up on `https://` after redirects | |
 
 If nothing answers on plain HTTP at all, `https-redirect` passes, since no content is served without TLS.
+
+`cookies` checks every `Set-Cookie` header on the final response and lists each cookie with a problem. Some cookies are meant to be read by JavaScript, so a missing `HttpOnly` is a warning to review, not a failure. A `Set-Cookie` that only deletes a cookie (`Max-Age=0` or an `Expires` date in the past) is ignored, since the browser discards it.
 
 ## Development
 

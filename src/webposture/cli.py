@@ -4,20 +4,25 @@ import sys
 import urllib.error
 import urllib.request
 
-from . import __version__, headers, transport
+from . import __version__, cookies, headers, transport
 from .findings import FAIL
 
 USER_AGENT = f"web-posture-check/{__version__}"
 
 
 def fetch_headers(url, timeout):
+    """Return (final URL, headers dict, list of Set-Cookie values).
+
+    Set-Cookie is returned separately because a response can carry several,
+    and folding headers into a dict keeps only one of them.
+    """
     request = urllib.request.Request(url, method="GET", headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.geturl(), dict(response.headers.items())
+            return response.geturl(), dict(response.headers.items()), response.headers.get_all("Set-Cookie") or []
     except urllib.error.HTTPError as err:
         # Error pages still carry the site's headers, so check them anyway.
-        return err.geturl(), dict(err.headers.items())
+        return err.geturl(), dict(err.headers.items()), err.headers.get_all("Set-Cookie") or []
 
 
 class _RedirectRecorder(urllib.request.HTTPRedirectHandler):
@@ -69,12 +74,13 @@ def main(argv=None):
 
     url = normalise_target(args.target)
     try:
-        final_url, response_headers = fetch_headers(url, args.timeout)
+        final_url, response_headers, set_cookies = fetch_headers(url, args.timeout)
     except (urllib.error.URLError, OSError) as err:
         print(f"error: could not fetch {url}: {err}", file=sys.stderr)
         return 2
 
     findings = headers.run(response_headers)
+    findings.append(cookies.check_cookies(set_cookies, final_url.startswith("https://")))
     http_url = transport.http_url_for(url)
     findings.append(transport.check_https_redirect(http_url, fetch_final_url(http_url, args.timeout)))
 
