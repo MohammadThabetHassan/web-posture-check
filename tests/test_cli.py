@@ -275,6 +275,13 @@ class FailOnTest(unittest.TestCase):
         self.assertEqual(cli.exit_code([passed, skipped], "warn"), 0)
         self.assertEqual(cli.exit_code([passed, cli.Finding("caa", "WARN", "no CAA record")], "warn"), 1)
 
+    def test_fail_on_warn_still_exits_1_on_a_fail(self):
+        # warn is a superset of fail: raising the bar to warnings must not stop
+        # a FAIL from failing the gate. Guards against warn meaning only {WARN}.
+        passed = cli.Finding("hsts", "PASS", "ok")
+        failed = cli.Finding("csp", "FAIL", "Content-Security-Policy header is missing")
+        self.assertEqual(cli.exit_code([passed, failed], "warn"), 1)
+
     def test_invalid_level_is_a_usage_error(self):
         with mock.patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit) as ctx:
             cli.main(["example.com", "--fail-on", "pass"])
