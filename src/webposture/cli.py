@@ -20,17 +20,34 @@ def fetch_headers(url, timeout):
         return err.geturl(), dict(err.headers.items())
 
 
+class _RedirectRecorder(urllib.request.HTTPRedirectHandler):
+    """Remember the last redirect target, so it is known even if fetching it fails."""
+
+    def __init__(self):
+        super().__init__()
+        self.last_url = None
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        self.last_url = newurl
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def fetch_final_url(url, timeout):
     """Follow redirects from url and return where they end, or None if nothing answered."""
     request = urllib.request.Request(url, method="GET", headers={"User-Agent": USER_AGENT})
+    recorder = _RedirectRecorder()
+    opener = urllib.request.build_opener(recorder)
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with opener.open(request, timeout=timeout) as response:
             return response.geturl()
     except urllib.error.HTTPError as err:
         # An error page is still a response served at that URL.
         return err.geturl()
     except (urllib.error.URLError, OSError):
-        return None
+        # The server answered with a redirect but the target failed, e.g. an
+        # https:// URL with a broken certificate. The redirect still happened,
+        # so report where it pointed rather than "not reachable".
+        return recorder.last_url
 
 
 def normalise_target(target):
