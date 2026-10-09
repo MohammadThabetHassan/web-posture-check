@@ -256,6 +256,15 @@ class HeaderChecksTest(unittest.TestCase):
         for value in ("0", " 0 "):
             self.assertEqual(headers.check_x_xss_protection({"X-XSS-Protection": value}).status, PASS, value)
 
+    def test_x_xss_protection_disabled_with_params_passes(self):
+        # Disabling is read from the first token, so leftover parameters (e.g.
+        # from a site migrating 1; mode=block to 0; mode=block) still count as
+        # disabled. Guards the 0 branch against a whole-value comparison that
+        # would wrongly flag it as invalid.
+        f = headers.check_x_xss_protection({"X-XSS-Protection": "0; mode=block"})
+        self.assertEqual(f.status, PASS)
+        self.assertNotIn("not a valid value", f.detail)
+
     def test_x_xss_protection_enabled_warns(self):
         for value in ("1", "1; mode=block", "1; report=https://example.com/r"):
             f = headers.check_x_xss_protection({"x-xss-protection": value})
