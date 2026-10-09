@@ -7,7 +7,7 @@ import urllib.request
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
-from . import __version__, cookies, cors, emailauth, headers, securitytxt, tls, transport
+from . import __version__, caa, cookies, cors, emailauth, headers, securitytxt, tls, transport
 from .findings import FAIL, WARN, Finding
 
 USER_AGENT = f"web-posture-check/{__version__}"
@@ -139,6 +139,14 @@ def check_dkim(url, timeout, selectors=None):
     return emailauth.check_dkim(domain, keys, explicit)
 
 
+def check_caa(url, timeout):
+    """Check which CAs may issue for the host that served the final URL."""
+    found_on, records, problem = caa.lookup_caa(urlsplit(url).hostname.rstrip("."), timeout)
+    if problem:
+        return Finding("caa", WARN, problem)
+    return caa.check_caa(found_on, records)
+
+
 def normalise_target(target):
     if "://" not in target:
         target = "https://" + target
@@ -148,7 +156,8 @@ def normalise_target(target):
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="web-posture-check",
-        description="Check a website's security posture (security headers, cookies, CORS and HTTPS redirect).",
+        description="Check a website's security posture: security headers, cookies, CORS, TLS, "
+                    "security.txt, DNS (CAA, SPF, DMARC, DKIM) and the HTTPS redirect.",
     )
     parser.add_argument("target", help="domain or URL, e.g. example.com or https://example.com/login")
     parser.add_argument("--json", action="store_true", help="print findings as JSON")
@@ -180,6 +189,7 @@ def main(argv=None):
     findings.append(probe_cors(final_url, args.timeout))
     findings.append(check_tls(final_url, args.timeout))
     findings.append(check_legacy_tls(final_url, args.timeout))
+    findings.append(check_caa(final_url, args.timeout))
     findings.append(check_security_txt(final_url, args.timeout))
     findings.append(check_spf(final_url, args.timeout))
     findings.append(check_dmarc(final_url, args.timeout))

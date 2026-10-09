@@ -2,7 +2,7 @@
 
 A small command-line tool that checks a website's security posture and tells you what to fix. The core has no third-party dependencies.
 
-It checks HTTP security headers, cookie flags, CORS, the TLS certificate, deprecated TLS versions, `security.txt`, the domain's SPF, DMARC and DKIM records, and that plain HTTP redirects to HTTPS.
+It checks HTTP security headers, cookie flags, CORS, the TLS certificate, deprecated TLS versions, the CAA record, `security.txt`, the domain's SPF, DMARC and DKIM records, and that plain HTTP redirects to HTTPS.
 
 ## Install
 
@@ -14,7 +14,7 @@ pip install .
 
 Requires Python 3.9 or newer.
 
-The SPF, DMARC and DKIM checks read DNS TXT records, which the standard library cannot do. Install the optional DNS support to enable them; without it they are reported as skipped:
+The CAA, SPF, DMARC and DKIM checks read DNS records, which the standard library cannot do. Install the optional DNS support to enable them; without it they are reported as skipped:
 
 ```bash
 pip install ".[dns]"
@@ -48,6 +48,7 @@ Target: https://example.com (HTTP 200)
   [PASS] cors: no Access-Control-Allow-Origin for a foreign origin
   [PASS] tls-certificate: certificate valid until 2026-12-25 (77 days)
   [FAIL] tls-protocols: server accepts TLS 1.0, TLS 1.1, which are deprecated (RFC 8996)
+  [WARN] caa: no CAA record, so any certificate authority may issue certificates for this host
   [WARN] security-txt: no /.well-known/security.txt, so researchers have no published way to report vulnerabilities
   [PASS] spf: example.com: v=spf1 -all
   [PASS] dmarc: _dmarc.example.com: v=DMARC1;p=reject;sp=reject;adkim=s;aspf=s
@@ -85,6 +86,7 @@ If the target's certificate is expired or not trusted, that is reported as a `tl
 | `cors` | the response reflects any `Origin`, or allows `Origin: null`, together with `Access-Control-Allow-Credentials: true` | the response reflects any `Origin` without credentials, or sends `*` with credentials (browsers reject that combination) |
 | `tls-certificate` | the certificate has expired, or is not trusted (wrong host, self-signed, untrusted chain, not yet valid) | it expires within 14 days (renewal tooling normally renews 30 days ahead, so this usually means renewal is failing) |
 | `tls-protocols` | the server completes a TLS 1.0 or TLS 1.1 handshake (deprecated by RFC 8996) | this machine's OpenSSL cannot offer one of those versions, so support is unknown |
+| `caa` | | the host has no CAA record (any certificate authority may issue for it), the record has no `issue` property, or it has an unknown critical tag (every CA must then refuse) |
 | `security-txt` | | `/.well-known/security.txt` is missing, not served as `text/plain`, lacks the required `Contact` or `Expires` field, has an invalid, expired or duplicate `Expires`, or `Expires` is more than a year away (RFC 9116 recommends less) |
 | `spf` | the domain has more than one SPF record (receivers then ignore SPF), or the record ends in `+all`/`all`, which authorises every server | there is no SPF record, it ends in `?all`, it has no `all` mechanism and no `redirect=`, or the DNS lookup could not be done |
 | `dmarc` | the domain has more than one DMARC record (receivers then apply no policy) | there is no DMARC record, `p=none` (monitoring only), `p=` is missing or invalid, or `pct=` is below 100 |
@@ -97,7 +99,7 @@ If nothing answers on plain HTTP at all, `https-redirect` passes, since no conte
 
 To test TLS versions, a separate handshake is attempted that allows only TLS 1.0, then only TLS 1.1. OpenSSL 3 will not offer those versions at its default security level, so the probe lowers it for that connection only. If the local OpenSSL still cannot offer a version, the result is a warning, never a false pass.
 
-SPF, DMARC and DKIM are read for the site's domain with a leading `www.` removed, so `www.example.com` is checked as `example.com`. DKIM is looked up at `<selector>._domainkey.<domain>` for common provider selectors (Google Workspace, Microsoft 365, Mailchimp, SendGrid, Cloudflare Email Routing and frequent defaults), or only for the selectors given with `--dkim-selector`. If a subdomain has no `_dmarc` record, the check falls back to its parent domains (down to two labels), as receivers do for the organizational domain.
+CAA is read for the host that served the final URL, climbing to its parent domains until a record is found, as certificate authorities do (RFC 8659). SPF, DMARC and DKIM are read for the site's domain with a leading `www.` removed, so `www.example.com` is checked as `example.com`. DKIM is looked up at `<selector>._domainkey.<domain>` for common provider selectors (Google Workspace, Microsoft 365, Mailchimp, SendGrid, Cloudflare Email Routing and frequent defaults), or only for the selectors given with `--dkim-selector`. If a subdomain has no `_dmarc` record, the check falls back to its parent domains (down to two labels), as receivers do for the organizational domain.
 
 To test CORS, the page is requested a second time with `Origin: https://web-posture-check.invalid`. The `.invalid` domain is reserved (RFC 2606) and cannot exist, so a site that allows it will allow any website.
 
