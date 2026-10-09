@@ -15,7 +15,7 @@ def _cell(text):
     return " ".join(str(text).split()).replace("|", "\\|")
 
 
-def render(url, status, findings, version, generated_at, note=None):
+def render(url, status, findings, version, generated_at, note=None, score=None):
     counts = {s: sum(1 for f in findings if f.status == s) for s in (FAIL, WARN, PASS)}
     status_text = f"HTTP {status}" if status is not None else "no HTTP response"
     lines = [
@@ -23,7 +23,8 @@ def render(url, status, findings, version, generated_at, note=None):
         "",
         f"{status_text}, generated {generated_at:%Y-%m-%d %H:%M} UTC by web-posture-check {version}",
         "",
-        f"**{counts[FAIL]} FAIL**, **{counts[WARN]} WARN**, {counts[PASS]} PASS",
+        (f"**Grade {score[1]}** ({score[0]}/100): " if score else "")
+        + f"**{counts[FAIL]} FAIL**, **{counts[WARN]} WARN**, {counts[PASS]} PASS",
         "",
     ]
     if note:

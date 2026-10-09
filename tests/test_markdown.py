@@ -42,6 +42,11 @@ class RenderTest(unittest.TestCase):
         self.assertIn("no HTTP response, generated", out)
         self.assertIn("> other checks skipped: no trusted HTTPS connection", out)
 
+    def test_grade_leads_the_summary_when_given(self):
+        out = render(score=(55, "F"))
+        self.assertIn("**Grade F** (55/100): **2 FAIL**, **1 WARN**, 1 PASS", out)
+        self.assertNotIn("Grade", render())
+
     def test_report_template_stays_ascii(self):
         # The report must be plain ASCII apart from the findings themselves, so
         # it survives non-UTF-8 consoles and files on Windows (an early version

@@ -7,7 +7,7 @@ import urllib.request
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
-from . import __version__, caa, cookies, cors, emailauth, headers, markdown, securitytxt, tls, transport
+from . import __version__, caa, cookies, cors, emailauth, headers, markdown, score, securitytxt, tls, transport
 from .findings import FAIL, WARN, Finding
 
 USER_AGENT = f"web-posture-check/{__version__}"
@@ -239,16 +239,22 @@ def main(argv=None):
 
 
 def report(args, url, status, findings, note=None):
+    result_score = score.compute(findings)
     if args.format == "json":
         result = {"url": url, "status": status, "findings": [f.to_dict() for f in findings]}
+        if result_score:
+            result["score"], result["grade"] = result_score
         if note:
             result["note"] = note
         print(json.dumps(result, indent=2))
         return
     if args.format == "markdown":
-        print(markdown.render(url, status, findings, __version__, datetime.now(timezone.utc), note=note), end="")
+        print(markdown.render(url, status, findings, __version__, datetime.now(timezone.utc), note=note,
+                              score=result_score), end="")
         return
     print(f"Target: {url} ({f'HTTP {status}' if status is not None else 'no HTTP response'})")
+    if result_score:
+        print(f"Score: {result_score[0]}/100 (grade {result_score[1]})")
     for f in findings:
         print(f"  [{f.status:4}] {f.check}: {f.detail}")
     if note:

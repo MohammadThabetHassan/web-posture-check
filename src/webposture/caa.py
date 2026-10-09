@@ -5,7 +5,7 @@ check_caa takes the records and needs no network access.
 """
 
 from .emailauth import INSTALL_HINT, dmarc_candidates
-from .findings import Finding, PASS, WARN
+from .findings import Finding, PASS, WARN, SKIPPED_PREFIX
 
 # Property tags defined by RFC 8659 and RFC 9495. A CA must refuse to issue
 # when it sees a critical flag on a tag it does not understand.
@@ -48,7 +48,7 @@ def lookup_caa(host, timeout):
         import dns.exception
         import dns.resolver
     except ImportError:
-        return None, [], f"skipped: {INSTALL_HINT}"
+        return None, [], f"{SKIPPED_PREFIX} {INSTALL_HINT}"
     for name in dmarc_candidates(host):
         try:
             answer = dns.resolver.resolve(name, "CAA", lifetime=timeout)
