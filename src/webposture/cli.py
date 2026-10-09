@@ -80,6 +80,14 @@ def check_tls(url, timeout):
     return tls.check_certificate(*result, now=datetime.now(timezone.utc))
 
 
+def check_legacy_tls(url, timeout):
+    """Check whether the host that served the final URL still accepts TLS 1.0 or 1.1."""
+    parts = urlsplit(url)
+    if parts.scheme != "https":
+        return Finding("tls-protocols", WARN, "the final URL is not HTTPS, so TLS versions were not checked")
+    return tls.check_legacy_protocols(tls.probe_legacy_protocols(parts.hostname, parts.port or 443, timeout))
+
+
 def normalise_target(target):
     if "://" not in target:
         target = "https://" + target
@@ -118,6 +126,7 @@ def main(argv=None):
     findings.append(cookies.check_cookies(set_cookies, final_url.startswith("https://")))
     findings.append(probe_cors(final_url, args.timeout))
     findings.append(check_tls(final_url, args.timeout))
+    findings.append(check_legacy_tls(final_url, args.timeout))
     http_url = transport.http_url_for(url)
     findings.append(transport.check_https_redirect(http_url, fetch_final_url(http_url, args.timeout)))
 
