@@ -6,7 +6,7 @@ import urllib.error
 from contextlib import redirect_stdout
 from unittest import mock
 
-from webposture import cli
+from webposture import cli, emailauth
 
 
 def _cert_error(code, message):
@@ -56,6 +56,23 @@ class CertificateErrorTest(unittest.TestCase):
         with mock.patch.object(cli, "fetch_headers", side_effect=err):
             with redirect_stdout(io.StringIO()), mock.patch("sys.stderr", new_callable=io.StringIO):
                 self.assertEqual(cli.main(["missing.example"]), 2)
+
+
+class DmarcFallbackTest(unittest.TestCase):
+    """The CLI walks from the subdomain up to the organizational domain. No network needed."""
+
+    def test_falls_back_to_parent_when_subdomain_has_no_record(self):
+        # mail.google.com publishes no _dmarc record, so the check must fall
+        # back to _dmarc.google.com and report the policy found there.
+        def fake_lookup(name, timeout):
+            if name == "_dmarc.google.com":
+                return ["v=DMARC1; p=reject"], None
+            return [], None  # every other name, including the subdomain, has nothing
+
+        with mock.patch.object(emailauth, "lookup_txt", side_effect=fake_lookup):
+            finding = cli.check_dmarc("https://mail.google.com/", 5)
+        self.assertEqual(finding.status, "PASS")
+        self.assertIn("_dmarc.google.com", finding.detail)
 
 
 if __name__ == "__main__":

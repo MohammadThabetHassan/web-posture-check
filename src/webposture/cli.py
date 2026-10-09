@@ -114,6 +114,18 @@ def check_spf(url, timeout):
     return emailauth.check_spf(domain, txt)
 
 
+def check_dmarc(url, timeout):
+    """Find the DMARC record that applies to the site's mail domain and check it."""
+    domain = emailauth.mail_domain(urlsplit(url).hostname)
+    for candidate in emailauth.dmarc_candidates(domain):
+        txt, problem = emailauth.lookup_txt(f"_dmarc.{candidate}", timeout)
+        if problem:
+            return Finding("dmarc", WARN, problem)
+        if emailauth.dmarc_records(txt):
+            return emailauth.check_dmarc(candidate, txt)
+    return emailauth.check_dmarc(None, [])
+
+
 def normalise_target(target):
     if "://" not in target:
         target = "https://" + target
@@ -155,6 +167,7 @@ def main(argv=None):
     findings.append(check_legacy_tls(final_url, args.timeout))
     findings.append(check_security_txt(final_url, args.timeout))
     findings.append(check_spf(final_url, args.timeout))
+    findings.append(check_dmarc(final_url, args.timeout))
     http_url = transport.http_url_for(url)
     findings.append(transport.check_https_redirect(http_url, fetch_final_url(http_url, args.timeout)))
 

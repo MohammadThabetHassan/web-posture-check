@@ -81,5 +81,45 @@ class LookupTxtTest(unittest.TestCase):
         self.assertEqual(txt, ["v=spf1 include:_spf.google.com ~all"])
 
 
+
+class DmarcTest(unittest.TestCase):
+    def test_candidates_walk_up_to_two_labels(self):
+        self.assertEqual(emailauth.dmarc_candidates("a.b.example.com"), ["a.b.example.com", "b.example.com", "example.com"])
+        self.assertEqual(emailauth.dmarc_candidates("example.com"), ["example.com"])
+
+    def test_reject_and_quarantine_pass(self):
+        for record in ("v=DMARC1; p=reject; rua=mailto:r@example.com", "v=DMARC1;p=quarantine;pct=100", "V=DMARC1; P=REJECT"):
+            self.assertEqual(emailauth.check_dmarc("example.com", [record]).status, PASS, record)
+
+    def test_missing_record_warns(self):
+        f = emailauth.check_dmarc(None, [])
+        self.assertEqual(f.status, WARN)
+        self.assertIn("no DMARC record", f.detail)
+
+    def test_p_none_warns(self):
+        f = emailauth.check_dmarc("example.com", ["v=DMARC1; p=none; rua=mailto:r@example.com"])
+        self.assertEqual(f.status, WARN)
+        self.assertIn("only monitors", f.detail)
+
+    def test_missing_or_invalid_p_warns(self):
+        for record in ("v=DMARC1; rua=mailto:r@example.com", "v=DMARC1; p=block"):
+            f = emailauth.check_dmarc("example.com", [record])
+            self.assertEqual(f.status, WARN, record)
+            self.assertIn("treat it as p=none", f.detail)
+
+    def test_partial_pct_warns(self):
+        f = emailauth.check_dmarc("example.com", ["v=DMARC1; p=reject; pct=25"])
+        self.assertEqual(f.status, WARN)
+        self.assertIn("pct=25", f.detail)
+
+    def test_multiple_records_fail(self):
+        f = emailauth.check_dmarc("example.com", ["v=DMARC1; p=reject", "v=DMARC1; p=none"])
+        self.assertEqual(f.status, FAIL)
+
+    def test_non_dmarc_txt_is_ignored(self):
+        f = emailauth.check_dmarc("example.com", ["some-verification=abc", "v=DMARC1; p=reject"])
+        self.assertEqual(f.status, PASS)
+
+
 if __name__ == "__main__":
     unittest.main()
