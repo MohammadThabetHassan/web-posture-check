@@ -128,6 +128,16 @@ class HeaderChecksTest(unittest.TestCase):
         f = headers.check_csp({"Content-Security-Policy": "script-src 'nonce-abc123' 'strict-dynamic' https: 'unsafe-inline'"})
         self.assertEqual(f.status, PASS)
 
+    def test_csp_strict_dynamic_does_not_silence_unsafe_eval(self):
+        # 'strict-dynamic' tells browsers to ignore host and scheme sources, but
+        # it has no effect on 'unsafe-eval'. The exemption must stay scoped to
+        # broad sources, so a policy that pairs the two must still warn about
+        # 'unsafe-eval' even though the https: source is correctly ignored.
+        f = headers.check_csp({"Content-Security-Policy": "script-src 'nonce-abc123' 'strict-dynamic' https: 'unsafe-eval'"})
+        self.assertEqual(f.status, WARN)
+        self.assertIn("'unsafe-eval'", f.detail)
+        self.assertNotIn("https:", f.detail)
+
     def test_csp_without_script_directives_says_scripts_unrestricted(self):
         f = headers.check_csp({"Content-Security-Policy": "frame-ancestors 'none'"})
         self.assertEqual(f.status, PASS)
