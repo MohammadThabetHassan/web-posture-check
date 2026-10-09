@@ -1,7 +1,7 @@
 import unittest
 
 from webposture import transport
-from webposture.findings import PASS, FAIL
+from webposture.findings import PASS, WARN, FAIL
 
 
 class HttpUrlTest(unittest.TestCase):
@@ -46,6 +46,29 @@ class HttpsRedirectTest(unittest.TestCase):
         f = transport.check_https_redirect("http://example.com/", None)
         self.assertEqual(f.status, PASS)
         self.assertIn("not reachable", f.detail)
+
+
+
+class StatusTest(unittest.TestCase):
+    def test_success_and_redirect_statuses_pass(self):
+        for status in (200, 204, 304):
+            f = transport.check_status(status)
+            self.assertEqual(f.status, PASS, status)
+            self.assertIn(f"HTTP {status}", f.detail)
+
+    def test_error_status_warns_that_findings_describe_the_error_page(self):
+        f = transport.check_status(404)
+        self.assertEqual(f.status, WARN)
+        self.assertIn("describe this error page", f.detail)
+        self.assertNotIn("bot protection", f.detail)
+
+    def test_bot_block_statuses_mention_bot_protection(self):
+        for status in (403, 429, 503):
+            self.assertIn("bot protection", transport.check_status(status).detail, status)
+
+    def test_boundary_399_passes_and_400_warns(self):
+        self.assertEqual(transport.check_status(399).status, PASS)
+        self.assertEqual(transport.check_status(400).status, WARN)
 
 
 if __name__ == "__main__":

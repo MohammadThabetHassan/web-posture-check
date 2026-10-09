@@ -21,12 +21,13 @@ web-posture-check example.com
 web-posture-check https://example.com/login --json
 ```
 
-A bare domain is fetched over `https://`. Redirects are followed and the headers of the final response are checked. The same host and path are then requested over `http://` (default port) to see whether it redirects to HTTPS.
+A bare domain is fetched over `https://`. The final HTTP status is shown next to the target and included as `status` in the `--json` output. Redirects are followed and the headers of the final response are checked. The same host and path are then requested over `http://` (default port) to see whether it redirects to HTTPS.
 
 Example output:
 
 ```
-Target: https://example.com
+Target: https://example.com (HTTP 200)
+  [PASS] http-status: final response is HTTP 200
   [FAIL] hsts: Strict-Transport-Security header is missing
   [FAIL] csp: Content-Security-Policy header is missing
   [FAIL] x-content-type-options: X-Content-Type-Options header is missing
@@ -55,6 +56,7 @@ This makes it easy to use as a gate in CI.
 
 | Check | FAIL when | WARN when |
 |-------|-----------|-----------|
+| `http-status` | | the final response is an error (HTTP 400 or higher), so the other findings describe an error page. 403, 429 and 503 are often bot protection blocking automated clients |
 | `hsts` | `Strict-Transport-Security` missing or has no `max-age` | `max-age` is below 6 months, or `preload` is set without the preload list's requirements (`max-age` of at least 1 year and `includeSubDomains`) |
 | `csp` | `Content-Security-Policy` missing | only `Content-Security-Policy-Report-Only` is set; or the script policy (`script-src`, else `default-src`) allows `'unsafe-inline'` without a nonce or hash, or allows `'unsafe-eval'`, or allows scripts from any host (`*`, `https:`, `http:`) or from `data:` URLs (ignored when `'strict-dynamic'` is set) |
 | `x-content-type-options` | missing or not `nosniff` | |
