@@ -130,6 +130,49 @@ def check_permissions_policy(headers):
     return Finding("permissions-policy", PASS, "Permissions-Policy is set")
 
 
+def _policy_token(value):
+    """First token of a policy header, e.g. 'same-origin; report-to="x"' -> 'same-origin'."""
+    return value.split(";", 1)[0].strip().lower() if value else None
+
+
+# Values browsers understand. Anything else is ignored, which means no protection.
+COOP_VALUES = ("unsafe-none", "same-origin-allow-popups", "same-origin", "noopener-allow-popups")
+CORP_VALUES = ("same-site", "same-origin", "cross-origin")
+COEP_VALUES = ("unsafe-none", "require-corp", "credentialless")
+
+
+def _known_policy(headers, name, allowed):
+    """Return (value, None) for a recognised value or None, or (None, raw) for an unknown one."""
+    value = _policy_token(_get(headers, name))
+    if value is None or value in allowed:
+        return value, None
+    return None, value
+
+
+def check_cross_origin_isolation(headers):
+    """Report COOP, CORP and COEP. WARN only: they harden against XS-Leaks, not core flaws.
+
+    COEP is only needed for cross-origin isolation (e.g. SharedArrayBuffer),
+    so a missing COEP is reported in the detail but never warned about.
+    """
+    coop, coop_bad = _known_policy(headers, "Cross-Origin-Opener-Policy", COOP_VALUES)
+    corp, corp_bad = _known_policy(headers, "Cross-Origin-Resource-Policy", CORP_VALUES)
+    coep, coep_bad = _known_policy(headers, "Cross-Origin-Embedder-Policy", COEP_VALUES)
+    problems = [f"{name} value '{value}' is not recognised, so browsers ignore it"
+                for name, value in (("Cross-Origin-Opener-Policy", coop_bad),
+                                    ("Cross-Origin-Resource-Policy", corp_bad),
+                                    ("Cross-Origin-Embedder-Policy", coep_bad)) if value]
+    if coop in (None, "unsafe-none"):
+        problems.append("Cross-Origin-Opener-Policy is missing or unsafe-none, so a page that opens this one keeps a handle to its window")
+    if corp is None:
+        problems.append("Cross-Origin-Resource-Policy is missing, so other sites can embed this response")
+    isolated = coop == "same-origin" and coep in ("require-corp", "credentialless")
+    state = f"COOP={coop or 'unset'}, CORP={corp or 'unset'}, COEP={coep or 'unset'}" + ("; cross-origin isolated" if isolated else "")
+    if problems:
+        return Finding("cross-origin-isolation", WARN, "; ".join(problems) + f" ({state})")
+    return Finding("cross-origin-isolation", PASS, state)
+
+
 # Headers that exist only to name the server-side stack. Any value helps an
 # attacker match the site to known vulnerabilities, so their presence is reported.
 STACK_DISCLOSURE_HEADERS = ("X-Powered-By", "X-AspNet-Version", "X-AspNetMvc-Version")
@@ -160,6 +203,7 @@ ALL_CHECKS = [
     check_framing,
     check_referrer_policy,
     check_permissions_policy,
+    check_cross_origin_isolation,
     check_information_leakage,
 ]
 

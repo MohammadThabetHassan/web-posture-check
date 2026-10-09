@@ -9,6 +9,8 @@ GOOD = {
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "strict-origin-when-cross-origin",
     "Permissions-Policy": "camera=()",
+    "Cross-Origin-Opener-Policy": "same-origin",
+    "Cross-Origin-Resource-Policy": "same-origin",
 }
 
 
@@ -28,6 +30,7 @@ class HeaderChecksTest(unittest.TestCase):
         self.assertEqual(results["clickjacking"], FAIL)
         self.assertEqual(results["referrer-policy"], WARN)
         self.assertEqual(results["permissions-policy"], WARN)
+        self.assertEqual(results["cross-origin-isolation"], WARN)
         self.assertEqual(results["information-leakage"], PASS)
 
     def test_short_hsts_max_age_warns(self):
@@ -175,6 +178,78 @@ class HeaderChecksTest(unittest.TestCase):
         leak = next(f for f in results if f.check == "information-leakage")
         self.assertEqual(leak.status, WARN)
         self.assertFalse(any(f.status == FAIL for f in results))
+
+    def test_coop_and_corp_set_passes_without_coep(self):
+        f = headers.check_cross_origin_isolation({"Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Resource-Policy": "same-site"})
+        self.assertEqual(f.status, PASS)
+        self.assertIn("COEP=unset", f.detail)
+        self.assertNotIn("cross-origin isolated", f.detail)
+
+    def test_coop_unsafe_none_warns(self):
+        f = headers.check_cross_origin_isolation({"Cross-Origin-Opener-Policy": "unsafe-none", "Cross-Origin-Resource-Policy": "same-origin"})
+        self.assertEqual(f.status, WARN)
+        self.assertIn("Cross-Origin-Opener-Policy", f.detail)
+        self.assertNotIn("Cross-Origin-Resource-Policy is missing", f.detail)
+
+    def test_missing_corp_warns(self):
+        f = headers.check_cross_origin_isolation({"Cross-Origin-Opener-Policy": "same-origin-allow-popups"})
+        self.assertEqual(f.status, WARN)
+        self.assertIn("Cross-Origin-Resource-Policy is missing", f.detail)
+
+    def test_coop_same_origin_allow_popups_does_not_warn(self):
+        # same-origin-allow-popups still severs a cross-origin opener's handle,
+        # so it is an acceptable COOP value (sites that open OAuth popups rely on
+        # it). With CORP set the check must pass and raise no COOP warning;
+        # guards against tightening the test to require exactly "same-origin".
+        f = headers.check_cross_origin_isolation({
+            "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
+            "Cross-Origin-Resource-Policy": "same-origin",
+        })
+        self.assertEqual(f.status, PASS)
+        self.assertNotIn("Cross-Origin-Opener-Policy", f.detail)
+
+    def test_unrecognised_coop_value_is_treated_as_missing(self):
+        f = headers.check_cross_origin_isolation({
+            "Cross-Origin-Opener-Policy": "same-orgin",
+            "Cross-Origin-Resource-Policy": "same-origin",
+        })
+        self.assertEqual(f.status, WARN)
+        self.assertIn("value 'same-orgin' is not recognised", f.detail)
+        self.assertIn("COOP=unset", f.detail)
+
+    def test_unrecognised_corp_value_is_treated_as_missing(self):
+        f = headers.check_cross_origin_isolation({
+            "Cross-Origin-Opener-Policy": "same-origin",
+            "Cross-Origin-Resource-Policy": "sameorigin",
+        })
+        self.assertEqual(f.status, WARN)
+        self.assertIn("Cross-Origin-Resource-Policy is missing", f.detail)
+
+    def test_unrecognised_coep_value_warns_and_prevents_isolation(self):
+        f = headers.check_cross_origin_isolation({
+            "Cross-Origin-Opener-Policy": "same-origin",
+            "Cross-Origin-Resource-Policy": "same-origin",
+            "Cross-Origin-Embedder-Policy": "require_corp",
+        })
+        self.assertEqual(f.status, WARN)
+        self.assertNotIn("cross-origin isolated", f.detail)
+
+    def test_coop_report_to_parameter_is_ignored(self):
+        f = headers.check_cross_origin_isolation({
+            "Cross-Origin-Opener-Policy": 'same-origin; report-to="coop"',
+            "Cross-Origin-Resource-Policy": "same-origin",
+            "Cross-Origin-Embedder-Policy": 'require-corp; report-to="coep"',
+        })
+        self.assertEqual(f.status, PASS)
+        self.assertIn("cross-origin isolated", f.detail)
+
+    def test_credentialless_coep_counts_as_isolated(self):
+        f = headers.check_cross_origin_isolation({
+            "Cross-Origin-Opener-Policy": "same-origin",
+            "Cross-Origin-Resource-Policy": "same-origin",
+            "Cross-Origin-Embedder-Policy": "credentialless",
+        })
+        self.assertIn("cross-origin isolated", f.detail)
 
     def test_x_frame_options_accepted_without_csp(self):
         f = headers.check_framing({"X-Frame-Options": "sameorigin"})
