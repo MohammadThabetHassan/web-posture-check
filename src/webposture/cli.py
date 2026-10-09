@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
 from . import __version__, caa, cookies, cors, emailauth, headers, markdown, score, securitytxt, tls, transport
-from .findings import FAIL, WARN, Finding
+from .findings import FAIL, WARN, SKIPPED_PREFIX, Finding
 
 USER_AGENT = f"web-posture-check/{__version__}"
 
@@ -194,6 +194,8 @@ def main(argv=None):
     output.add_argument("--json", action="store_const", const="json", dest="format",
                         help="same as --format json")
     parser.add_argument("--timeout", type=float, default=10.0, help="request timeout in seconds (default 10)")
+    parser.add_argument("--fail-on", choices=("fail", "warn"), default="fail",
+                        help="exit 1 on any FAIL (default), or with 'warn' on any WARN or FAIL")
     parser.add_argument("--dkim-selector", action="append", metavar="SELECTOR",
                         help="DKIM selector to check (repeatable); by default common selectors are tried")
     selection = parser.add_mutually_exclusive_group()
@@ -266,8 +268,19 @@ def scan(target, args):
     findings = [transport.check_status(status)] if wanted("http-status") else []
     findings += [f for f in headers.run(response_headers) if wanted(f.check)]
     findings += [run() for name, run in later if wanted(name)]
-    code = 1 if any(f.status == FAIL for f in findings) else 0
-    return {"url": final_url, "status": status, "findings": findings, "note": None}, code
+    return {"url": final_url, "status": status, "findings": findings, "note": None}, exit_code(findings, args.fail_on)
+
+
+def exit_code(findings, fail_on):
+    """1 if any finding is at or above the --fail-on level, else 0.
+
+    With --fail-on warn, findings reported as skipped (a check that could not
+    run, e.g. without the optional DNS extra) do not count: they say nothing
+    about the site.
+    """
+    levels = {FAIL} if fail_on == "fail" else {FAIL, WARN}
+    failing = any(f.status in levels and not f.detail.startswith(SKIPPED_PREFIX) for f in findings)
+    return 1 if failing else 0
 
 
 def to_json(result):
