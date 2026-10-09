@@ -1,0 +1,30 @@
+"""CORS misconfiguration check.
+
+The CLI requests the page again with an Origin header for a domain that
+cannot exist, then passes the response's CORS headers here. No network access.
+"""
+
+from .findings import Finding, PASS, WARN, FAIL
+
+# .invalid is reserved (RFC 2606), so no real site can legitimately be allowed.
+PROBE_ORIGIN = "https://web-posture-check.invalid"
+
+
+def check_cors(allow_origin, allow_credentials, probe_origin=PROBE_ORIGIN):
+    """allow_origin / allow_credentials are the Access-Control-Allow-* values, or None."""
+    if allow_origin is None:
+        return Finding("cors", PASS, "no Access-Control-Allow-Origin for a foreign origin")
+    origin = allow_origin.strip()
+    credentials = (allow_credentials or "").strip().lower() == "true"
+    if origin == probe_origin:
+        if credentials:
+            return Finding("cors", FAIL, "reflects any Origin with credentials allowed: any website can read authenticated responses")
+        return Finding("cors", WARN, "reflects any Origin (without credentials)")
+    if origin.lower() == "null" and credentials:
+        # Sandboxed iframes and local files send Origin: null, so this is open to anyone.
+        return Finding("cors", FAIL, "allows Origin null with credentials: any website can read authenticated responses from a sandboxed iframe")
+    if origin == "*" and credentials:
+        return Finding("cors", WARN, "'*' with credentials allowed: browsers reject this combination, which suggests a misconfigured CORS policy")
+    if origin == "*":
+        return Finding("cors", PASS, "allows any origin without credentials (public resource)")
+    return Finding("cors", PASS, f"allows only {origin}")
