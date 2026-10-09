@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "web-posture-check"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Check a website's security posture from the command line"
 readme = "README.md"
 license = { text = "MIT" }
@@ -14,6 +14,9 @@ dependencies = []
 
 [project.scripts]
 web-posture-check = "webposture.cli:main"
+
+[tool.setuptools.dynamic]
+version = { attr = "webposture.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
