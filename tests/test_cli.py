@@ -207,6 +207,14 @@ class MultipleTargetsTest(unittest.TestCase):
         _, out = self._run("good.example", "--json")
         self.assertNotIn("results", json.loads(out))
 
+    def test_markdown_prints_one_report_per_target(self):
+        # Markdown has no "results" wrapper like JSON, so each target must get
+        # its own full report. Guards against only the first target rendering.
+        _, out = self._run("good.example", "bad.example", "--format", "markdown")
+        self.assertEqual(out.count("## Web posture report:"), 2)
+        self.assertIn("## Web posture report: https://good.example/", out)
+        self.assertIn("## Web posture report: https://bad.example/", out)
+
     def test_worst_exit_code_wins_and_other_targets_still_run(self):
         code, out = self._run("good.example", "down.example", "bad.example")
         self.assertEqual(code, 2)
