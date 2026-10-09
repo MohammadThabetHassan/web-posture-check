@@ -1,8 +1,8 @@
 # web-posture-check
 
-A small command-line tool that checks a website's security posture and tells you what to fix. It has no third-party dependencies.
+A small command-line tool that checks a website's security posture and tells you what to fix. The core has no third-party dependencies.
 
-It checks HTTP security headers, cookie flags, CORS, the TLS certificate, deprecated TLS versions, `security.txt`, and that plain HTTP redirects to HTTPS. More TLS checks, email authentication (SPF, DKIM, DMARC) and more are on the roadmap.
+It checks HTTP security headers, cookie flags, CORS, the TLS certificate, deprecated TLS versions, `security.txt`, the domain's SPF record, and that plain HTTP redirects to HTTPS. DMARC, DKIM and more are on the roadmap.
 
 ## Install
 
@@ -13,6 +13,12 @@ pip install .
 ```
 
 Requires Python 3.9 or newer.
+
+The SPF check reads DNS TXT records, which the standard library cannot do. Install the optional DNS support to enable it; without it the check is reported as skipped:
+
+```bash
+pip install ".[dns]"
+```
 
 ## Usage
 
@@ -42,6 +48,7 @@ Target: https://example.com (HTTP 200)
   [PASS] tls-certificate: certificate valid until 2026-12-25 (77 days)
   [FAIL] tls-protocols: server accepts TLS 1.0, TLS 1.1, which are deprecated (RFC 8996)
   [WARN] security-txt: no /.well-known/security.txt, so researchers have no published way to report vulnerabilities
+  [PASS] spf: example.com: v=spf1 -all
   [FAIL] https-redirect: http://example.com/ is served over plain HTTP without redirecting to HTTPS
 ```
 
@@ -76,6 +83,7 @@ If the target's certificate is expired or not trusted, that is reported as a `tl
 | `tls-certificate` | the certificate has expired, or is not trusted (wrong host, self-signed, untrusted chain, not yet valid) | it expires within 14 days (renewal tooling normally renews 30 days ahead, so this usually means renewal is failing) |
 | `tls-protocols` | the server completes a TLS 1.0 or TLS 1.1 handshake (deprecated by RFC 8996) | this machine's OpenSSL cannot offer one of those versions, so support is unknown |
 | `security-txt` | | `/.well-known/security.txt` is missing, not served as `text/plain`, lacks the required `Contact` or `Expires` field, has an invalid, expired or duplicate `Expires`, or `Expires` is more than a year away (RFC 9116 recommends less) |
+| `spf` | the domain has more than one SPF record (receivers then ignore SPF), or the record ends in `+all`/`all`, which authorises every server | there is no SPF record, it ends in `?all`, it has no `all` mechanism and no `redirect=`, or the DNS lookup could not be done |
 | `https-redirect` | the `http://` URL answers without ending up on `https://` after redirects | |
 
 If nothing answers on plain HTTP at all, `https-redirect` passes, since no content is served without TLS.
@@ -83,6 +91,8 @@ If nothing answers on plain HTTP at all, `https-redirect` passes, since no conte
 `cookies` checks every `Set-Cookie` header on the final response and lists each cookie with a problem. Some cookies are meant to be read by JavaScript, so a missing `HttpOnly` is a warning to review, not a failure. A `Set-Cookie` that only deletes a cookie (`Max-Age=0` or an `Expires` date in the past) is ignored, since the browser discards it.
 
 To test TLS versions, a separate handshake is attempted that allows only TLS 1.0, then only TLS 1.1. OpenSSL 3 will not offer those versions at its default security level, so the probe lowers it for that connection only. If the local OpenSSL still cannot offer a version, the result is a warning, never a false pass.
+
+SPF is read for the site's domain with a leading `www.` removed, so `www.example.com` is checked as `example.com`.
 
 To test CORS, the page is requested a second time with `Origin: https://web-posture-check.invalid`. The `.invalid` domain is reserved (RFC 2606) and cannot exist, so a site that allows it will allow any website.
 
