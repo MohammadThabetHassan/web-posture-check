@@ -41,6 +41,16 @@ class CertificateErrorTest(unittest.TestCase):
         self.assertEqual(result["findings"][0]["status"], "FAIL")
         self.assertIn("not trusted: Hostname mismatch", result["findings"][0]["detail"])
 
+    def test_certificate_error_json_carries_skip_note(self):
+        # --json documents a top-level note explaining that the other checks
+        # were skipped. A consumer parsing the output relies on it, so pin it.
+        with mock.patch.object(cli, "fetch_headers", side_effect=_cert_error(10, "certificate has expired")):
+            code, out = self._run("expired.example", "--json")
+        result = json.loads(out)
+        self.assertEqual(code, 1)
+        self.assertIn("note", result)
+        self.assertIn("other checks skipped", result["note"])
+
     def test_other_fetch_errors_still_exit_2(self):
         err = urllib.error.URLError(OSError("Name or service not known"))
         with mock.patch.object(cli, "fetch_headers", side_effect=err):
