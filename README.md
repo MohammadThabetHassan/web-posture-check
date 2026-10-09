@@ -2,7 +2,7 @@
 
 A small command-line tool that checks a website's security posture and tells you what to fix. It has no third-party dependencies.
 
-The first release checks HTTP security headers. TLS, email authentication (SPF, DKIM, DMARC), cookie flags and more are on the roadmap.
+It checks HTTP security headers and that plain HTTP redirects to HTTPS. TLS, email authentication (SPF, DKIM, DMARC), cookie flags and more are on the roadmap.
 
 ## Install
 
@@ -21,7 +21,7 @@ web-posture-check example.com
 web-posture-check https://example.com/login --json
 ```
 
-A bare domain is fetched over `https://`. Redirects are followed and the headers of the final response are checked.
+A bare domain is fetched over `https://`. Redirects are followed and the headers of the final response are checked. The same host and path are then requested over `http://` (default port) to see whether it redirects to HTTPS.
 
 Example output:
 
@@ -34,6 +34,7 @@ Target: https://example.com
   [WARN] referrer-policy: Referrer-Policy header is missing (browser default applies)
   [WARN] permissions-policy: Permissions-Policy header is missing
   [PASS] information-leakage: no server version or stack headers
+  [FAIL] https-redirect: http://example.com/ is served over plain HTTP without redirecting to HTTPS
 ```
 
 ### Exit codes
@@ -57,6 +58,9 @@ This makes it easy to use as a gate in CI.
 | `referrer-policy` | set to `unsafe-url` | missing |
 | `permissions-policy` | | missing |
 | `information-leakage` | | `Server` includes a version number, or `X-Powered-By`, `X-AspNet-Version` or `X-AspNetMvc-Version` is present |
+| `https-redirect` | the `http://` URL answers without ending up on `https://` after redirects | |
+
+If nothing answers on plain HTTP at all, `https-redirect` passes, since no content is served without TLS.
 
 ## Development
 

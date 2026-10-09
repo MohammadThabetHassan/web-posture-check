@@ -4,7 +4,7 @@ import sys
 import urllib.error
 import urllib.request
 
-from . import __version__, headers
+from . import __version__, headers, transport
 from .findings import FAIL
 
 USER_AGENT = f"web-posture-check/{__version__}"
@@ -20,6 +20,19 @@ def fetch_headers(url, timeout):
         return err.geturl(), dict(err.headers.items())
 
 
+def fetch_final_url(url, timeout):
+    """Follow redirects from url and return where they end, or None if nothing answered."""
+    request = urllib.request.Request(url, method="GET", headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return response.geturl()
+    except urllib.error.HTTPError as err:
+        # An error page is still a response served at that URL.
+        return err.geturl()
+    except (urllib.error.URLError, OSError):
+        return None
+
+
 def normalise_target(target):
     if "://" not in target:
         target = "https://" + target
@@ -29,7 +42,7 @@ def normalise_target(target):
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="web-posture-check",
-        description="Check a website's security posture (HTTP security headers).",
+        description="Check a website's security posture (HTTP security headers and HTTPS redirect).",
     )
     parser.add_argument("target", help="domain or URL, e.g. example.com or https://example.com/login")
     parser.add_argument("--json", action="store_true", help="print findings as JSON")
@@ -45,6 +58,8 @@ def main(argv=None):
         return 2
 
     findings = headers.run(response_headers)
+    http_url = transport.http_url_for(url)
+    findings.append(transport.check_https_redirect(http_url, fetch_final_url(http_url, args.timeout)))
 
     if args.json:
         print(json.dumps({"url": final_url, "findings": [f.to_dict() for f in findings]}, indent=2))
