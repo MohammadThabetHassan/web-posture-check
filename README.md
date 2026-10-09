@@ -60,7 +60,7 @@ This makes it easy to use as a gate in CI.
 | `clickjacking` | no CSP `frame-ancestors` and no `X-Frame-Options: DENY/SAMEORIGIN` | |
 | `referrer-policy` | set to `unsafe-url` | missing |
 | `permissions-policy` | | missing |
-| `cross-origin-isolation` | | `Cross-Origin-Opener-Policy` is missing or `unsafe-none`, or `Cross-Origin-Resource-Policy` is missing. `Cross-Origin-Embedder-Policy` is reported but never warned about, since it is only needed for cross-origin isolation |
+| `cross-origin-isolation` | | `Cross-Origin-Opener-Policy` is missing or `unsafe-none`, `Cross-Origin-Resource-Policy` is missing, or any of the three headers has a value browsers do not recognise (so it is ignored). A missing `Cross-Origin-Embedder-Policy` is reported but not warned about, since it is only needed for cross-origin isolation |
 | `information-leakage` | | `Server` includes a version number, or `X-Powered-By`, `X-AspNet-Version` or `X-AspNetMvc-Version` is present |
 | `cookies` | a cookie on an HTTPS response lacks `Secure`, any cookie sets `SameSite=None` without `Secure`, a `__Secure-` cookie lacks `Secure`, or a `__Host-` cookie lacks `Secure` or `Path=/` or sets `Domain` (browsers reject all of these) | a cookie lacks `HttpOnly` or `SameSite` |
 | `cors` | the response reflects any `Origin`, or allows `Origin: null`, together with `Access-Control-Allow-Credentials: true` | the response reflects any `Origin` without credentials, or sends `*` with credentials (browsers reject that combination) |

@@ -135,16 +135,33 @@ def _policy_token(value):
     return value.split(";", 1)[0].strip().lower() if value else None
 
 
+# Values browsers understand. Anything else is ignored, which means no protection.
+COOP_VALUES = ("unsafe-none", "same-origin-allow-popups", "same-origin", "noopener-allow-popups")
+CORP_VALUES = ("same-site", "same-origin", "cross-origin")
+COEP_VALUES = ("unsafe-none", "require-corp", "credentialless")
+
+
+def _known_policy(headers, name, allowed):
+    """Return (value, None) for a recognised value or None, or (None, raw) for an unknown one."""
+    value = _policy_token(_get(headers, name))
+    if value is None or value in allowed:
+        return value, None
+    return None, value
+
+
 def check_cross_origin_isolation(headers):
     """Report COOP, CORP and COEP. WARN only: they harden against XS-Leaks, not core flaws.
 
     COEP is only needed for cross-origin isolation (e.g. SharedArrayBuffer),
     so a missing COEP is reported in the detail but never warned about.
     """
-    coop = _policy_token(_get(headers, "Cross-Origin-Opener-Policy"))
-    corp = _policy_token(_get(headers, "Cross-Origin-Resource-Policy"))
-    coep = _policy_token(_get(headers, "Cross-Origin-Embedder-Policy"))
-    problems = []
+    coop, coop_bad = _known_policy(headers, "Cross-Origin-Opener-Policy", COOP_VALUES)
+    corp, corp_bad = _known_policy(headers, "Cross-Origin-Resource-Policy", CORP_VALUES)
+    coep, coep_bad = _known_policy(headers, "Cross-Origin-Embedder-Policy", COEP_VALUES)
+    problems = [f"{name} value '{value}' is not recognised, so browsers ignore it"
+                for name, value in (("Cross-Origin-Opener-Policy", coop_bad),
+                                    ("Cross-Origin-Resource-Policy", corp_bad),
+                                    ("Cross-Origin-Embedder-Policy", coep_bad)) if value]
     if coop in (None, "unsafe-none"):
         problems.append("Cross-Origin-Opener-Policy is missing or unsafe-none, so a page that opens this one keeps a handle to its window")
     if corp is None:

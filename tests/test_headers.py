@@ -208,6 +208,32 @@ class HeaderChecksTest(unittest.TestCase):
         self.assertEqual(f.status, PASS)
         self.assertNotIn("Cross-Origin-Opener-Policy", f.detail)
 
+    def test_unrecognised_coop_value_is_treated_as_missing(self):
+        f = headers.check_cross_origin_isolation({
+            "Cross-Origin-Opener-Policy": "same-orgin",
+            "Cross-Origin-Resource-Policy": "same-origin",
+        })
+        self.assertEqual(f.status, WARN)
+        self.assertIn("value 'same-orgin' is not recognised", f.detail)
+        self.assertIn("COOP=unset", f.detail)
+
+    def test_unrecognised_corp_value_is_treated_as_missing(self):
+        f = headers.check_cross_origin_isolation({
+            "Cross-Origin-Opener-Policy": "same-origin",
+            "Cross-Origin-Resource-Policy": "sameorigin",
+        })
+        self.assertEqual(f.status, WARN)
+        self.assertIn("Cross-Origin-Resource-Policy is missing", f.detail)
+
+    def test_unrecognised_coep_value_warns_and_prevents_isolation(self):
+        f = headers.check_cross_origin_isolation({
+            "Cross-Origin-Opener-Policy": "same-origin",
+            "Cross-Origin-Resource-Policy": "same-origin",
+            "Cross-Origin-Embedder-Policy": "require_corp",
+        })
+        self.assertEqual(f.status, WARN)
+        self.assertNotIn("cross-origin isolated", f.detail)
+
     def test_coop_report_to_parameter_is_ignored(self):
         f = headers.check_cross_origin_isolation({
             "Cross-Origin-Opener-Policy": 'same-origin; report-to="coop"',
