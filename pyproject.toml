@@ -12,6 +12,10 @@ authors = [{ name = "Mohammad Thabet" }]
 requires-python = ">=3.9"
 dependencies = []
 
+[project.optional-dependencies]
+# DNS-based checks (SPF). The core tool stays dependency-free.
+dns = ["dnspython>=2.0"]
+
 [project.scripts]
 web-posture-check = "webposture.cli:main"
 

@@ -7,7 +7,7 @@ import urllib.request
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
-from . import __version__, cookies, cors, headers, securitytxt, tls, transport
+from . import __version__, cookies, cors, emailauth, headers, securitytxt, tls, transport
 from .findings import FAIL, WARN, Finding
 
 USER_AGENT = f"web-posture-check/{__version__}"
@@ -105,6 +105,15 @@ def check_security_txt(url, timeout):
     return securitytxt.check_security_txt(status, content_type, body, now=datetime.now(timezone.utc))
 
 
+def check_spf(url, timeout):
+    """Check the SPF record of the site's mail domain (www. stripped from the host)."""
+    domain = emailauth.mail_domain(urlsplit(url).hostname)
+    txt, problem = emailauth.lookup_txt(domain, timeout)
+    if problem:
+        return Finding("spf", WARN, problem)
+    return emailauth.check_spf(domain, txt)
+
+
 def normalise_target(target):
     if "://" not in target:
         target = "https://" + target
@@ -145,6 +154,7 @@ def main(argv=None):
     findings.append(check_tls(final_url, args.timeout))
     findings.append(check_legacy_tls(final_url, args.timeout))
     findings.append(check_security_txt(final_url, args.timeout))
+    findings.append(check_spf(final_url, args.timeout))
     http_url = transport.http_url_for(url)
     findings.append(transport.check_https_redirect(http_url, fetch_final_url(http_url, args.timeout)))
 
