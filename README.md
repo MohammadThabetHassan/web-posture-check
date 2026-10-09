@@ -64,7 +64,7 @@ This makes it easy to use as a gate in CI.
 
 If nothing answers on plain HTTP at all, `https-redirect` passes, since no content is served without TLS.
 
-`cookies` checks every `Set-Cookie` header on the final response and lists each cookie with a problem. Some cookies are meant to be read by JavaScript, so a missing `HttpOnly` is a warning to review, not a failure.
+`cookies` checks every `Set-Cookie` header on the final response and lists each cookie with a problem. Some cookies are meant to be read by JavaScript, so a missing `HttpOnly` is a warning to review, not a failure. A `Set-Cookie` that only deletes a cookie (`Max-Age=0` or an `Expires` date in the past) is ignored, since the browser discards it.
 
 ## Development
 

@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timezone
 
 from webposture import cookies
 from webposture.findings import PASS, WARN, FAIL
@@ -53,6 +54,33 @@ class CheckCookiesTest(unittest.TestCase):
         # gated on Secure being absent, so this canonical config must pass.
         f = cookies.check_cookies(["sso=1; Secure; HttpOnly; SameSite=None"], is_https=True)
         self.assertEqual(f.status, PASS)
+
+    def test_max_age_zero_deletion_is_ignored(self):
+        f = cookies.check_cookies(["sid=; Max-Age=0; Path=/"], is_https=True)
+        self.assertEqual(f.status, PASS)
+        self.assertIn("1 deletion(s) ignored", f.detail)
+
+    def test_past_expires_deletion_is_ignored(self):
+        now = datetime(2026, 10, 9, tzinfo=timezone.utc)
+        f = cookies.check_cookies(["sid=; Expires=Thu, 01 Jan 1970 00:00:00 GMT"], is_https=True, now=now)
+        self.assertEqual(f.status, PASS)
+
+    def test_future_expires_is_still_checked(self):
+        now = datetime(2026, 10, 9, tzinfo=timezone.utc)
+        f = cookies.check_cookies(["sid=1; Expires=Sat, 09 Oct 2027 14:49:56 GMT"], is_https=True, now=now)
+        self.assertEqual(f.status, FAIL)
+
+    def test_max_age_wins_over_expires(self):
+        # RFC 6265: a positive Max-Age keeps the cookie even if Expires is past.
+        now = datetime(2026, 10, 9, tzinfo=timezone.utc)
+        f = cookies.check_cookies(["sid=1; Max-Age=3600; Expires=Thu, 01 Jan 1970 00:00:00 GMT"], is_https=True, now=now)
+        self.assertEqual(f.status, FAIL)
+
+    def test_deletion_alongside_live_cookie_only_reports_live_one(self):
+        f = cookies.check_cookies(["old=; Max-Age=0", "sid=1; HttpOnly; SameSite=Lax"], is_https=True)
+        self.assertEqual(f.status, FAIL)
+        self.assertNotIn("old:", f.detail)
+        self.assertIn("sid: missing Secure", f.detail)
 
     def test_worst_status_wins_and_every_cookie_is_listed(self):
         f = cookies.check_cookies(
