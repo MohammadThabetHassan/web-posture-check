@@ -71,6 +71,13 @@ class LegacyProtocolsTest(unittest.TestCase):
         f = tls.check_legacy_protocols({"TLS 1.0": tls.UNTESTABLE, "TLS 1.1": tls.ACCEPTED})
         self.assertEqual(f.status, FAIL)
 
+    def test_multiple_accepted_versions_are_all_named(self):
+        # The common real case (e.g. example.com) accepts both versions, so the
+        # finding must name every accepted version, not just the first one.
+        f = tls.check_legacy_protocols({"TLS 1.0": tls.ACCEPTED, "TLS 1.1": tls.ACCEPTED})
+        self.assertEqual(f.status, FAIL)
+        self.assertIn("accepts TLS 1.0, TLS 1.1", f.detail)
+
     def test_untestable_is_a_warning_not_a_pass(self):
         # Our own OpenSSL refusing must never be reported as the server refusing.
         f = tls.check_legacy_protocols({"TLS 1.0": tls.UNTESTABLE, "TLS 1.1": tls.REFUSED})
