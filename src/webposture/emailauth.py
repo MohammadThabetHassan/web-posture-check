@@ -1,8 +1,8 @@
-"""Email authentication checks (SPF), read from DNS.
+"""Email authentication checks (SPF and DMARC), read from DNS.
 
 The standard library cannot query TXT records, so lookups use the optional
 dnspython package (pip install "web-posture-check[dns]"). Without it the check
-is reported as skipped. check_spf itself takes the TXT strings and needs no
+is reported as skipped. check_spf and check_dmarc take the TXT strings and need no
 network access.
 """
 
@@ -61,3 +61,51 @@ def lookup_txt(domain, timeout):
         return None, f"DNS lookup for {domain} failed: {err.__class__.__name__}"
     # A TXT record can be split into several strings; they are joined without spaces (RFC 7208 section 3.3).
     return [b"".join(r.strings).decode("utf-8", errors="replace") for r in answer], None
+
+
+def dmarc_candidates(domain):
+    """Domains whose _dmarc record applies, most specific first.
+
+    Receivers fall back from a subdomain to the organizational domain
+    (RFC 7489 section 6.6.3). Without the Public Suffix List this walks up to
+    two labels, which matches it for names like shop.example.com.
+    """
+    labels = domain.split(".")
+    return [".".join(labels[i:]) for i in range(0, max(len(labels) - 1, 1))]
+
+
+def dmarc_records(txt_strings):
+    return [t for t in txt_strings if t.replace(" ", "").lower().startswith("v=dmarc1")]
+
+
+def parse_dmarc_tags(record):
+    tags = {}
+    for part in record.split(";"):
+        key, sep, value = part.partition("=")
+        if sep:
+            tags[key.strip().lower()] = value.strip()
+    return tags
+
+
+def check_dmarc(found_on, txt_strings):
+    """found_on is the domain whose _dmarc record was read, or None if no domain had one."""
+    if found_on is None:
+        return Finding("dmarc", WARN, "no DMARC record, so receivers get no instruction for mail that fails SPF and DKIM")
+    records = dmarc_records(txt_strings)
+    if len(records) > 1:
+        # RFC 7489 section 6.6.3: with more than one record, no DMARC policy is applied.
+        return Finding("dmarc", FAIL, f"_dmarc.{found_on} has {len(records)} DMARC records, so receivers apply no DMARC policy")
+    record = records[0]
+    tags = parse_dmarc_tags(record)
+    policy = tags.get("p", "").lower()
+    problems = []
+    if policy not in ("none", "quarantine", "reject"):
+        problems.append(f"no valid p= tag ('{tags.get('p', '')}'), so receivers treat it as p=none")
+    elif policy == "none":
+        problems.append("p=none only monitors; spoofed mail is still delivered")
+    pct = tags.get("pct")
+    if pct is not None and pct != "100":
+        problems.append(f"pct={pct} applies the policy to only part of the failing mail")
+    if problems:
+        return Finding("dmarc", WARN, f"_dmarc.{found_on}: " + "; ".join(problems) + f": {record}")
+    return Finding("dmarc", PASS, f"_dmarc.{found_on}: {record}")
