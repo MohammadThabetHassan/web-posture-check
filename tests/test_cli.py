@@ -158,5 +158,20 @@ class CheckSelectionTest(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 2)
 
 
+class ScoreOutputTest(unittest.TestCase):
+    """The score and grade reach the JSON output. No network needed."""
+
+    def test_json_carries_score_and_grade(self):
+        out = io.StringIO()
+        with mock.patch.object(cli, "fetch_headers", return_value=("https://example.com/", {}, [], 200)), \
+                redirect_stdout(out):
+            code = cli.main(["example.com", "--only", "http-status,hsts", "--json"])
+        result = json.loads(out.getvalue())
+        # http-status passes and hsts fails on empty headers: 1 of 2 scored -> 50, F.
+        self.assertEqual(result["score"], 50)
+        self.assertEqual(result["grade"], "F")
+        self.assertEqual(code, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
