@@ -28,6 +28,7 @@ class HeaderChecksTest(unittest.TestCase):
         self.assertEqual(results["clickjacking"], FAIL)
         self.assertEqual(results["referrer-policy"], WARN)
         self.assertEqual(results["permissions-policy"], WARN)
+        self.assertEqual(results["information-leakage"], PASS)
 
     def test_short_hsts_max_age_warns(self):
         f = headers.check_hsts({"Strict-Transport-Security": "max-age=300"})
@@ -142,6 +143,38 @@ class HeaderChecksTest(unittest.TestCase):
         f = headers.check_csp({"Content-Security-Policy": "frame-ancestors 'none'"})
         self.assertEqual(f.status, PASS)
         self.assertIn("not restricted", f.detail)
+
+    def test_server_with_version_warns(self):
+        for server in ("nginx/1.18.0", "Apache/2.4.41 (Ubuntu)", "Microsoft-IIS/10.0", "Apache/2"):
+            f = headers.check_information_leakage({"Server": server})
+            self.assertEqual(f.status, WARN, server)
+            self.assertIn(server, f.detail)
+
+    def test_server_without_version_passes(self):
+        for server in ("nginx", "cloudflare", "AmazonS3", "ECS (dcb/7F84)"):
+            f = headers.check_information_leakage({"Server": server})
+            self.assertEqual(f.status, PASS, server)
+
+    def test_stack_disclosure_headers_warn(self):
+        f = headers.check_information_leakage({"X-Powered-By": "PHP/8.1.2", "x-aspnet-version": "4.0.30319"})
+        self.assertEqual(f.status, WARN)
+        self.assertIn("X-Powered-By: PHP/8.1.2", f.detail)
+        self.assertIn("X-AspNet-Version: 4.0.30319", f.detail)
+
+    def test_x_powered_by_without_version_still_warns(self):
+        f = headers.check_information_leakage({"X-Powered-By": "Express"})
+        self.assertEqual(f.status, WARN)
+
+    def test_information_leakage_is_warn_only_and_keeps_exit_code(self):
+        # The check is WARN-only by design so it never changes the exit code.
+        # Run it through the full pipeline on an otherwise-secure response that
+        # only leaks a server version: information-leakage must warn, and no
+        # finding may be FAIL, since cli returns 1 only when something fails.
+        leaking = dict(GOOD, Server="nginx/1.18.0")
+        results = headers.run(leaking)
+        leak = next(f for f in results if f.check == "information-leakage")
+        self.assertEqual(leak.status, WARN)
+        self.assertFalse(any(f.status == FAIL for f in results))
 
     def test_x_frame_options_accepted_without_csp(self):
         f = headers.check_framing({"X-Frame-Options": "sameorigin"})

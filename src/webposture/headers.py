@@ -130,6 +130,29 @@ def check_permissions_policy(headers):
     return Finding("permissions-policy", PASS, "Permissions-Policy is set")
 
 
+# Headers that exist only to name the server-side stack. Any value helps an
+# attacker match the site to known vulnerabilities, so their presence is reported.
+STACK_DISCLOSURE_HEADERS = ("X-Powered-By", "X-AspNet-Version", "X-AspNetMvc-Version")
+
+# A version number such as nginx/1.18.0, Microsoft-IIS/10.0 or Apache/2.
+# "/7F84" style build IDs are not versions, so a digit run must end the token.
+SERVER_VERSION = re.compile(r"\d+\.\d+|/v?\d+\b")
+
+
+def check_information_leakage(headers):
+    leaks = []
+    server = _get(headers, "Server")
+    if server and SERVER_VERSION.search(server):
+        leaks.append(f"Server: {server}")
+    for name in STACK_DISCLOSURE_HEADERS:
+        value = _get(headers, name)
+        if value is not None:
+            leaks.append(f"{name}: {value}")
+    if leaks:
+        return Finding("information-leakage", WARN, "response discloses the server stack (" + "; ".join(leaks) + ")")
+    return Finding("information-leakage", PASS, "no server version or stack headers")
+
+
 ALL_CHECKS = [
     check_hsts,
     check_csp,
@@ -137,6 +160,7 @@ ALL_CHECKS = [
     check_framing,
     check_referrer_policy,
     check_permissions_policy,
+    check_information_leakage,
 ]
 
 

@@ -33,6 +33,7 @@ Target: https://example.com
   [FAIL] clickjacking: neither CSP frame-ancestors nor X-Frame-Options DENY/SAMEORIGIN is set
   [WARN] referrer-policy: Referrer-Policy header is missing (browser default applies)
   [WARN] permissions-policy: Permissions-Policy header is missing
+  [PASS] information-leakage: no server version or stack headers
 ```
 
 ### Exit codes
@@ -55,6 +56,7 @@ This makes it easy to use as a gate in CI.
 | `clickjacking` | no CSP `frame-ancestors` and no `X-Frame-Options: DENY/SAMEORIGIN` | |
 | `referrer-policy` | set to `unsafe-url` | missing |
 | `permissions-policy` | | missing |
+| `information-leakage` | | `Server` includes a version number, or `X-Powered-By`, `X-AspNet-Version` or `X-AspNetMvc-Version` is present |
 
 ## Development
 
