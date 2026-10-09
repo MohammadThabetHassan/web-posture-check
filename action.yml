@@ -1,0 +1,63 @@
+name: web-posture-check
+description: Check websites' security posture (headers, cookies, CORS, TLS, CAA, security.txt, SPF, DMARC, DKIM) and fail the job on problems.
+author: Mohammad Thabet
+branding:
+  icon: shield
+  color: green
+
+inputs:
+  targets:
+    description: Domains or URLs to check, separated by spaces or new lines.
+    required: true
+  args:
+    description: >-
+      Extra options, e.g. "--only tls-certificate,caa" or "--fail-on warn".
+      Do not pass --format or --json; the action always produces a Markdown report.
+    required: false
+    default: ""
+  dns:
+    description: Install the optional DNS support so the CAA, SPF, DMARC and DKIM checks run ("true" or "false").
+    required: false
+    default: "true"
+  python-version:
+    description: Python version to run the tool with.
+    required: false
+    default: "3.12"
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - name: Install web-posture-check
+      shell: bash
+      # Inputs reach the shell through environment variables, never by direct
+      # interpolation into the script, so they cannot inject commands.
+      env:
+        ACTION_PATH: ${{ github.action_path }}
+        WITH_DNS: ${{ inputs.dns }}
+      run: |
+        if [ "$WITH_DNS" = "true" ]; then
+          python -m pip install --quiet "${ACTION_PATH}[dns]"
+        else
+          python -m pip install --quiet "${ACTION_PATH}"
+        fi
+
+    - name: Run web-posture-check
+      shell: bash
+      env:
+        TARGETS: ${{ inputs.targets }}
+        EXTRA_ARGS: ${{ inputs.args }}
+      run: |
+        # Split targets and options on whitespace on purpose, with globbing
+        # off so a value such as "*" is passed through literally.
+        set -f
+        set +e
+        web-posture-check $TARGETS $EXTRA_ARGS --format markdown > "$RUNNER_TEMP/web-posture-report.md"
+        code=$?
+        set -e
+        cat "$RUNNER_TEMP/web-posture-report.md"
+        cat "$RUNNER_TEMP/web-posture-report.md" >> "$GITHUB_STEP_SUMMARY"
+        exit $code

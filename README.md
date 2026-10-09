@@ -131,6 +131,40 @@ CAA is read for the host that served the final URL, climbing to its parent domai
 
 To test CORS, the page is requested a second time with `Origin: https://web-posture-check.invalid`. The `.invalid` domain is reserved (RFC 2606) and cannot exist, so a site that allows it will allow any website.
 
+## GitHub Action
+
+Run the checks from any repository's workflow. The job fails when a check fails, and the Markdown report is added to the job summary:
+
+```yaml
+name: Website posture
+on:
+  schedule:
+    - cron: "0 6 * * 1"   # every Monday 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  posture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: MohammadThabetHassan/web-posture-check@main
+        with:
+          targets: |
+            example.com
+            shop.example.com
+          args: --fail-on warn
+```
+
+Inputs:
+
+| Input | Default | Meaning |
+|---|---|---|
+| `targets` | (required) | Domains or URLs, separated by spaces or new lines |
+| `args` | `""` | Extra options such as `--only tls-certificate,caa` or `--fail-on warn`. Do not pass `--format` or `--json`; the action always writes a Markdown report |
+| `dns` | `"true"` | Install the optional DNS support for the CAA, SPF, DMARC and DKIM checks |
+| `python-version` | `"3.12"` | Python version to run with |
+
+For reproducible runs, pin the action to a commit SHA instead of `@main`.
+
 ## Development
 
 ```bash
