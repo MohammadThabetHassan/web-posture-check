@@ -52,6 +52,14 @@ class HeaderChecksTest(unittest.TestCase):
         self.assertEqual(f.status, WARN)
         self.assertIn("1 year", f.detail)
 
+    def test_hsts_preload_at_minimum_requirements_passes(self):
+        # Exactly one year plus includeSubDomains is the minimum the preload
+        # list accepts, so it must PASS. Guards the max-age comparison against
+        # an off-by-one (< vs <=) that would warn on compliant sites.
+        f = headers.check_hsts({"Strict-Transport-Security": "max-age=31536000; includeSubDomains; preload"})
+        self.assertEqual(f.status, PASS)
+        self.assertEqual(f.detail, "max-age=31536000; includeSubDomains; preload")
+
     def test_hsts_directives_are_case_insensitive(self):
         f = headers.check_hsts({"Strict-Transport-Security": "MAX-AGE=31536000; INCLUDESUBDOMAINS; PRELOAD"})
         self.assertEqual(f.status, PASS)
