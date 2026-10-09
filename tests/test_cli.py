@@ -95,5 +95,68 @@ class DkimSelectorTest(unittest.TestCase):
         self.assertEqual(looked_up, ["custom._domainkey.example.com"])
 
 
+class CheckSelectionTest(unittest.TestCase):
+    """--only/--skip choose checks, and skipped checks make no requests. No network needed."""
+
+    NETWORK = {
+        "probe_cors": "cors", "check_tls": "tls-certificate", "check_legacy_tls": "tls-protocols",
+        "check_caa": "caa", "check_security_txt": "security-txt", "check_spf": "spf",
+        "check_dmarc": "dmarc", "check_dkim": "dkim",
+    }
+
+    def _run(self, *argv):
+        called = []
+        patches = [mock.patch.object(cli, "fetch_headers", return_value=("https://example.com/", {}, [], 200)),
+                   mock.patch.object(cli, "fetch_final_url", side_effect=lambda *a: called.append("https-redirect") or "https://example.com/")]
+        for func, name in self.NETWORK.items():
+            patches.append(mock.patch.object(
+                cli, func, side_effect=lambda *a, _n=name: called.append(_n) or cli.Finding(_n, "PASS", "ok")))
+        out = io.StringIO()
+        for p in patches:
+            p.start()
+            self.addCleanup(p.stop)
+        with redirect_stdout(out):
+            code = cli.main(["example.com", "--json", *argv])
+        return code, [f["check"] for f in json.loads(out.getvalue())["findings"]], called
+
+    def test_default_runs_every_check_in_documented_order(self):
+        _, checks, _ = self._run()
+        self.assertEqual(checks, cli.ALL_CHECKS)
+
+    def test_only_runs_the_named_checks_and_nothing_else(self):
+        _, checks, called = self._run("--only", "tls-certificate,caa,hsts")
+        self.assertEqual(checks, ["hsts", "tls-certificate", "caa"])
+        self.assertEqual(called, ["tls-certificate", "caa"])
+
+    def test_skip_leaves_out_the_named_checks_and_their_requests(self):
+        _, checks, called = self._run("--skip", "spf,dmarc,dkim,https-redirect")
+        for name in ("spf", "dmarc", "dkim", "https-redirect"):
+            self.assertNotIn(name, checks)
+            self.assertNotIn(name, called)
+        self.assertIn("caa", checks)
+
+    def test_unknown_name_is_a_usage_error_listing_valid_names(self):
+        err = io.StringIO()
+        with mock.patch("sys.stderr", err), self.assertRaises(SystemExit) as ctx:
+            cli.main(["example.com", "--only", "tls,caa"])
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertIn("unknown check name(s): tls", err.getvalue())
+        self.assertIn("tls-certificate", err.getvalue())
+
+    def test_empty_value_is_a_usage_error_not_zero_checks(self):
+        # A value with no names (e.g. "--only ,") must be rejected, not accepted
+        # as an empty selection that would silently run no checks and exit 0.
+        err = io.StringIO()
+        with mock.patch("sys.stderr", err), self.assertRaises(SystemExit) as ctx:
+            cli.main(["example.com", "--only", ","])
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertIn("no check names given", err.getvalue())
+
+    def test_only_and_skip_cannot_be_combined(self):
+        with mock.patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit) as ctx:
+            cli.main(["example.com", "--only", "caa", "--skip", "spf"])
+        self.assertEqual(ctx.exception.code, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

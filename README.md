@@ -26,6 +26,8 @@ pip install ".[dns]"
 web-posture-check example.com
 web-posture-check https://example.com/login --json
 web-posture-check example.com --dkim-selector s1 --dkim-selector s2
+web-posture-check example.com --only tls-certificate,caa
+web-posture-check example.com --skip spf,dmarc,dkim
 ```
 
 A bare domain is fetched over `https://`. The final HTTP status is shown next to the target and included as `status` in the `--json` output. Redirects are followed and the headers of the final response are checked. The same host and path are then requested over `http://` (default port) to see whether it redirects to HTTPS.
@@ -55,6 +57,10 @@ Target: https://example.com (HTTP 200)
   [WARN] dkim: only revoked keys (empty p=) under common selectors (google, selector1, selector2, k1, s1, s2, default, dkim, mail, cf2024-1); fine if example.com sends no mail, otherwise its active key uses another selector, which --dkim-selector can check
   [FAIL] https-redirect: http://example.com/ is served over plain HTTP without redirecting to HTTPS
 ```
+
+### Choosing checks
+
+`--only` runs just the named checks and `--skip` runs everything except them. Both take comma-separated check names, the names shown in the output and in the table below. A left-out check makes no requests at all, so `--skip spf,dmarc,dkim,caa` also avoids the DNS lookups. An unknown name is a usage error that lists the valid names. The two options cannot be combined.
 
 ### Exit codes
 

@@ -153,6 +153,24 @@ def normalise_target(target):
     return target
 
 
+# Every check name, in report order. Header check names come from the
+# headers module itself so the list cannot drift from it.
+HEADER_CHECKS = [f.check for f in headers.run({})]
+ALL_CHECKS = (["http-status"] + HEADER_CHECKS
+              + ["cookies", "cors", "tls-certificate", "tls-protocols", "caa",
+                 "security-txt", "spf", "dmarc", "dkim", "https-redirect"])
+
+
+def parse_check_names(value):
+    """argparse type for --only/--skip: comma-separated check names, validated."""
+    names = [n.strip() for n in value.split(",") if n.strip()]
+    unknown = [n for n in names if n not in ALL_CHECKS]
+    if unknown or not names:
+        problem = f"unknown check name(s): {', '.join(unknown)}" if unknown else "no check names given"
+        raise argparse.ArgumentTypeError(f"{problem}; valid names: {', '.join(ALL_CHECKS)}")
+    return names
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         prog="web-posture-check",
@@ -164,8 +182,18 @@ def main(argv=None):
     parser.add_argument("--timeout", type=float, default=10.0, help="request timeout in seconds (default 10)")
     parser.add_argument("--dkim-selector", action="append", metavar="SELECTOR",
                         help="DKIM selector to check (repeatable); by default common selectors are tried")
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--only", type=parse_check_names, metavar="NAMES",
+                           help="run only these checks (comma-separated names, e.g. tls-certificate,caa)")
+    selection.add_argument("--skip", type=parse_check_names, metavar="NAMES",
+                           help="run every check except these (comma-separated names)")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     args = parser.parse_args(argv)
+
+    def wanted(name):
+        if args.only is not None:
+            return name in args.only
+        return args.skip is None or name not in args.skip
 
     url = normalise_target(args.target)
     try:
@@ -182,20 +210,25 @@ def main(argv=None):
         print(f"error: could not fetch {url}: {err}", file=sys.stderr)
         return 2
 
-    # The status goes first: when it is an error page, every finding below describes that page.
-    findings = [transport.check_status(status)]
-    findings += headers.run(response_headers)
-    findings.append(cookies.check_cookies(set_cookies, final_url.startswith("https://")))
-    findings.append(probe_cors(final_url, args.timeout))
-    findings.append(check_tls(final_url, args.timeout))
-    findings.append(check_legacy_tls(final_url, args.timeout))
-    findings.append(check_caa(final_url, args.timeout))
-    findings.append(check_security_txt(final_url, args.timeout))
-    findings.append(check_spf(final_url, args.timeout))
-    findings.append(check_dmarc(final_url, args.timeout))
-    findings.append(check_dkim(final_url, args.timeout, args.dkim_selector))
+    # Checks that need their own requests are wrapped in lambdas, so a check
+    # left out with --only/--skip never touches the network.
     http_url = transport.http_url_for(url)
-    findings.append(transport.check_https_redirect(http_url, fetch_final_url(http_url, args.timeout)))
+    later = [
+        ("cookies", lambda: cookies.check_cookies(set_cookies, final_url.startswith("https://"))),
+        ("cors", lambda: probe_cors(final_url, args.timeout)),
+        ("tls-certificate", lambda: check_tls(final_url, args.timeout)),
+        ("tls-protocols", lambda: check_legacy_tls(final_url, args.timeout)),
+        ("caa", lambda: check_caa(final_url, args.timeout)),
+        ("security-txt", lambda: check_security_txt(final_url, args.timeout)),
+        ("spf", lambda: check_spf(final_url, args.timeout)),
+        ("dmarc", lambda: check_dmarc(final_url, args.timeout)),
+        ("dkim", lambda: check_dkim(final_url, args.timeout, args.dkim_selector)),
+        ("https-redirect", lambda: transport.check_https_redirect(http_url, fetch_final_url(http_url, args.timeout))),
+    ]
+    # The status goes first: when it is an error page, every finding below describes that page.
+    findings = [transport.check_status(status)] if wanted("http-status") else []
+    findings += [f for f in headers.run(response_headers) if wanted(f.check)]
+    findings += [run() for name, run in later if wanted(name)]
 
     report(args, final_url, status, findings)
     return 1 if any(f.status == FAIL for f in findings) else 0
