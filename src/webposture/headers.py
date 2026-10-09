@@ -12,6 +12,10 @@ from .findings import Finding, PASS, WARN, FAIL
 HSTS_MIN_MAX_AGE = 15552000
 HSTS_PRELOAD_MIN_MAX_AGE = 31536000
 
+# Script sources that allow loading code from any host (or from data: URLs),
+# which lets an attacker who can inject a <script src> tag run their own code.
+BROAD_SCRIPT_SOURCES = ("*", "https:", "http:", "data:")
+
 
 def _get(headers, name):
     for key, value in headers.items():
@@ -64,6 +68,12 @@ def check_csp(headers):
         problems.append(f"{directive} allows 'unsafe-inline' without a nonce or hash")
     if "'unsafe-eval'" in sources:
         problems.append(f"{directive} allows 'unsafe-eval'")
+    # With 'strict-dynamic', CSP Level 3 browsers ignore host and scheme sources,
+    # so broad sources only matter without it.
+    if "'strict-dynamic'" not in sources:
+        broad = [src for src in sources if src in BROAD_SCRIPT_SOURCES]
+        if broad:
+            problems.append(f"{directive} allows scripts from " + ", ".join(broad))
     if problems:
         return Finding("csp", WARN, "; ".join(problems))
     return Finding("csp", PASS, "Content-Security-Policy is set")
