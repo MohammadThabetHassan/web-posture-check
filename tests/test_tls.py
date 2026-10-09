@@ -1,3 +1,5 @@
+import socket
+import ssl
 import unittest
 from datetime import datetime, timedelta, timezone
 
@@ -45,6 +47,51 @@ class CheckCertificateTest(unittest.TestCase):
             f = tls.check_certificate(None, code, message, NOW)
             self.assertEqual(f.status, FAIL, code)
             self.assertIn(f"not trusted: {message}", f.detail)
+
+
+
+def _ssl_error(reason):
+    err = ssl.SSLError(1, reason)
+    err.reason = reason
+    return err
+
+
+class LegacyProtocolsTest(unittest.TestCase):
+    def test_all_refused_passes(self):
+        f = tls.check_legacy_protocols({"TLS 1.0": tls.REFUSED, "TLS 1.1": tls.REFUSED})
+        self.assertEqual(f.status, PASS)
+
+    def test_any_accepted_fails_and_names_it(self):
+        f = tls.check_legacy_protocols({"TLS 1.0": tls.REFUSED, "TLS 1.1": tls.ACCEPTED})
+        self.assertEqual(f.status, FAIL)
+        self.assertIn("accepts TLS 1.1", f.detail)
+        self.assertNotIn("TLS 1.0", f.detail)
+
+    def test_accepted_wins_over_untestable(self):
+        f = tls.check_legacy_protocols({"TLS 1.0": tls.UNTESTABLE, "TLS 1.1": tls.ACCEPTED})
+        self.assertEqual(f.status, FAIL)
+
+    def test_untestable_is_a_warning_not_a_pass(self):
+        # Our own OpenSSL refusing must never be reported as the server refusing.
+        f = tls.check_legacy_protocols({"TLS 1.0": tls.UNTESTABLE, "TLS 1.1": tls.REFUSED})
+        self.assertEqual(f.status, WARN)
+        self.assertIn("could not test TLS 1.0", f.detail)
+
+
+class ClassifyHandshakeErrorTest(unittest.TestCase):
+    def test_local_cipher_refusal_is_untestable(self):
+        for reason in ("NO_CIPHERS_AVAILABLE", "NO_PROTOCOLS_AVAILABLE"):
+            self.assertEqual(tls.classify_handshake_error(_ssl_error(reason)), tls.UNTESTABLE, reason)
+
+    def test_server_alerts_are_refusals(self):
+        for reason in ("TLSV1_ALERT_PROTOCOL_VERSION", "UNSUPPORTED_PROTOCOL", "WRONG_VERSION_NUMBER"):
+            self.assertEqual(tls.classify_handshake_error(_ssl_error(reason)), tls.REFUSED, reason)
+
+    def test_connection_reset_is_a_refusal(self):
+        self.assertEqual(tls.classify_handshake_error(ConnectionResetError()), tls.REFUSED)
+
+    def test_timeout_is_untestable(self):
+        self.assertEqual(tls.classify_handshake_error(socket.timeout()), tls.UNTESTABLE)
 
 
 if __name__ == "__main__":

@@ -2,7 +2,7 @@
 
 A small command-line tool that checks a website's security posture and tells you what to fix. It has no third-party dependencies.
 
-It checks HTTP security headers, cookie flags, CORS, the TLS certificate's expiry, and that plain HTTP redirects to HTTPS. More TLS checks, email authentication (SPF, DKIM, DMARC) and more are on the roadmap.
+It checks HTTP security headers, cookie flags, CORS, the TLS certificate, deprecated TLS versions, and that plain HTTP redirects to HTTPS. More TLS checks, email authentication (SPF, DKIM, DMARC) and more are on the roadmap.
 
 ## Install
 
@@ -40,6 +40,7 @@ Target: https://example.com (HTTP 200)
   [PASS] cookies: no cookies set
   [PASS] cors: no Access-Control-Allow-Origin for a foreign origin
   [PASS] tls-certificate: certificate valid until 2026-12-25 (77 days)
+  [FAIL] tls-protocols: server accepts TLS 1.0, TLS 1.1, which are deprecated (RFC 8996)
   [FAIL] https-redirect: http://example.com/ is served over plain HTTP without redirecting to HTTPS
 ```
 
@@ -72,11 +73,14 @@ If the target's certificate is expired or not trusted, that is reported as a `tl
 | `cookies` | a cookie on an HTTPS response lacks `Secure`, any cookie sets `SameSite=None` without `Secure`, a `__Secure-` cookie lacks `Secure`, or a `__Host-` cookie lacks `Secure` or `Path=/` or sets `Domain` (browsers reject all of these) | a cookie lacks `HttpOnly` or `SameSite` |
 | `cors` | the response reflects any `Origin`, or allows `Origin: null`, together with `Access-Control-Allow-Credentials: true` | the response reflects any `Origin` without credentials, or sends `*` with credentials (browsers reject that combination) |
 | `tls-certificate` | the certificate has expired, or is not trusted (wrong host, self-signed, untrusted chain, not yet valid) | it expires within 14 days (renewal tooling normally renews 30 days ahead, so this usually means renewal is failing) |
+| `tls-protocols` | the server completes a TLS 1.0 or TLS 1.1 handshake (deprecated by RFC 8996) | this machine's OpenSSL cannot offer one of those versions, so support is unknown |
 | `https-redirect` | the `http://` URL answers without ending up on `https://` after redirects | |
 
 If nothing answers on plain HTTP at all, `https-redirect` passes, since no content is served without TLS.
 
 `cookies` checks every `Set-Cookie` header on the final response and lists each cookie with a problem. Some cookies are meant to be read by JavaScript, so a missing `HttpOnly` is a warning to review, not a failure. A `Set-Cookie` that only deletes a cookie (`Max-Age=0` or an `Expires` date in the past) is ignored, since the browser discards it.
+
+To test TLS versions, a separate handshake is attempted that allows only TLS 1.0, then only TLS 1.1. OpenSSL 3 will not offer those versions at its default security level, so the probe lowers it for that connection only. If the local OpenSSL still cannot offer a version, the result is a warning, never a false pass.
 
 To test CORS, the page is requested a second time with `Origin: https://web-posture-check.invalid`. The `.invalid` domain is reserved (RFC 2606) and cannot exist, so a site that allows it will allow any website.
 
