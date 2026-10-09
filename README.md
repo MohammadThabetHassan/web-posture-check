@@ -2,7 +2,7 @@
 
 A small command-line tool that checks a website's security posture and tells you what to fix. It has no third-party dependencies.
 
-It checks HTTP security headers, cookie flags, CORS, and that plain HTTP redirects to HTTPS. TLS, email authentication (SPF, DKIM, DMARC) and more are on the roadmap.
+It checks HTTP security headers, cookie flags, CORS, the TLS certificate's expiry, and that plain HTTP redirects to HTTPS. More TLS checks, email authentication (SPF, DKIM, DMARC) and more are on the roadmap.
 
 ## Install
 
@@ -39,6 +39,7 @@ Target: https://example.com (HTTP 200)
   [PASS] information-leakage: no server version or stack headers
   [PASS] cookies: no cookies set
   [PASS] cors: no Access-Control-Allow-Origin for a foreign origin
+  [PASS] tls-certificate: certificate valid until 2026-12-25 (77 days)
   [FAIL] https-redirect: http://example.com/ is served over plain HTTP without redirecting to HTTPS
 ```
 
@@ -68,6 +69,7 @@ This makes it easy to use as a gate in CI.
 | `information-leakage` | | `Server` includes a version number, or `X-Powered-By`, `X-AspNet-Version` or `X-AspNetMvc-Version` is present |
 | `cookies` | a cookie on an HTTPS response lacks `Secure`, any cookie sets `SameSite=None` without `Secure`, a `__Secure-` cookie lacks `Secure`, or a `__Host-` cookie lacks `Secure` or `Path=/` or sets `Domain` (browsers reject all of these) | a cookie lacks `HttpOnly` or `SameSite` |
 | `cors` | the response reflects any `Origin`, or allows `Origin: null`, together with `Access-Control-Allow-Credentials: true` | the response reflects any `Origin` without credentials, or sends `*` with credentials (browsers reject that combination) |
+| `tls-certificate` | the certificate has expired | it expires within 14 days (renewal tooling normally renews 30 days ahead, so this usually means renewal is failing), or it could not be verified for another reason, in which case expiry is not checked |
 | `https-redirect` | the `http://` URL answers without ending up on `https://` after redirects | |
 
 If nothing answers on plain HTTP at all, `https-redirect` passes, since no content is served without TLS.

@@ -3,8 +3,10 @@ import json
 import sys
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
+from urllib.parse import urlsplit
 
-from . import __version__, cookies, cors, headers, transport
+from . import __version__, cookies, cors, headers, tls, transport
 from .findings import FAIL, WARN, Finding
 
 USER_AGENT = f"web-posture-check/{__version__}"
@@ -65,6 +67,18 @@ def probe_cors(url, timeout):
     return cors.check_cors(lowered.get("access-control-allow-origin"), lowered.get("access-control-allow-credentials"))
 
 
+def check_tls(url, timeout):
+    """Check the certificate of the host that served the final URL."""
+    parts = urlsplit(url)
+    if parts.scheme != "https":
+        return Finding("tls-certificate", WARN, "the final URL is not HTTPS, so there is no certificate to check")
+    try:
+        result = tls.fetch_certificate(parts.hostname, parts.port or 443, timeout)
+    except OSError as err:
+        return Finding("tls-certificate", WARN, f"could not check the certificate: {err}")
+    return tls.check_certificate(*result, now=datetime.now(timezone.utc))
+
+
 def normalise_target(target):
     if "://" not in target:
         target = "https://" + target
@@ -94,6 +108,7 @@ def main(argv=None):
     findings += headers.run(response_headers)
     findings.append(cookies.check_cookies(set_cookies, final_url.startswith("https://")))
     findings.append(probe_cors(final_url, args.timeout))
+    findings.append(check_tls(final_url, args.timeout))
     http_url = transport.http_url_for(url)
     findings.append(transport.check_https_redirect(http_url, fetch_final_url(http_url, args.timeout)))
 
