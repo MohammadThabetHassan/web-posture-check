@@ -246,5 +246,47 @@ class MultipleTargetsTest(unittest.TestCase):
         self.assertIn("could not read --targets-file", err.getvalue())
 
 
+class FailOnTest(unittest.TestCase):
+    """--fail-on sets which status makes the run exit 1. No network needed."""
+
+    # hsts passes; referrer-policy is missing, which is a WARN.
+    HEADERS = {"Strict-Transport-Security": "max-age=31536000"}
+
+    def _code(self, *argv):
+        with mock.patch.object(cli, "fetch_headers", return_value=("https://example.com/", self.HEADERS, [], 200)), \
+                redirect_stdout(io.StringIO()):
+            return cli.main(["example.com", "--only", "hsts,referrer-policy", *argv])
+
+    def test_default_only_fails_on_fail(self):
+        self.assertEqual(self._code(), 0)
+        self.assertEqual(self._code("--fail-on", "fail"), 0)
+
+    def test_fail_on_warn_exits_1_for_a_warning(self):
+        self.assertEqual(self._code("--fail-on", "warn"), 1)
+
+    def test_fail_on_warn_passes_a_clean_run(self):
+        with mock.patch.object(cli, "fetch_headers", return_value=("https://example.com/", self.HEADERS, [], 200)), \
+                redirect_stdout(io.StringIO()):
+            self.assertEqual(cli.main(["example.com", "--only", "hsts", "--fail-on", "warn"]), 0)
+
+    def test_skipped_checks_do_not_trip_fail_on_warn(self):
+        skipped = cli.Finding("spf", "WARN", "skipped: install the optional DNS support")
+        passed = cli.Finding("hsts", "PASS", "ok")
+        self.assertEqual(cli.exit_code([passed, skipped], "warn"), 0)
+        self.assertEqual(cli.exit_code([passed, cli.Finding("caa", "WARN", "no CAA record")], "warn"), 1)
+
+    def test_fail_on_warn_still_exits_1_on_a_fail(self):
+        # warn is a superset of fail: raising the bar to warnings must not stop
+        # a FAIL from failing the gate. Guards against warn meaning only {WARN}.
+        passed = cli.Finding("hsts", "PASS", "ok")
+        failed = cli.Finding("csp", "FAIL", "Content-Security-Policy header is missing")
+        self.assertEqual(cli.exit_code([passed, failed], "warn"), 1)
+
+    def test_invalid_level_is_a_usage_error(self):
+        with mock.patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit) as ctx:
+            cli.main(["example.com", "--fail-on", "pass"])
+        self.assertEqual(ctx.exception.code, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -89,10 +89,10 @@ JSON output has top-level `score` and `grade` fields, and the Markdown summary s
 | Code | Meaning |
 |------|---------|
 | 0 | No FAIL findings (WARN findings may exist) |
-| 1 | At least one FAIL finding (including a broken certificate on the target) |
+| 1 | At least one FAIL finding (including a broken certificate on the target), or with `--fail-on warn` at least one WARN |
 | 2 | A target could not be reached (DNS failure, connection refused, timeout) |
 
-This makes it easy to use as a gate in CI.
+This makes it easy to use as a gate in CI. For a strict gate, `--fail-on warn` also exits 1 on any WARN; checks reported as skipped (such as DNS checks without the optional extra) do not count, since they say nothing about the site.
 
 If the target's certificate is expired or not trusted, that is reported as a `tls-certificate` FAIL and the run exits with 1. The other checks are skipped, because there is no trusted connection to read the response from.
 
