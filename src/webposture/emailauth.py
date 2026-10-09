@@ -1,8 +1,8 @@
-"""Email authentication checks (SPF and DMARC), read from DNS.
+"""Email authentication checks (SPF, DMARC and DKIM), read from DNS.
 
 The standard library cannot query TXT records, so lookups use the optional
 dnspython package (pip install "web-posture-check[dns]"). Without it the check
-is reported as skipped. check_spf and check_dmarc take the TXT strings and need no
+is reported as skipped. The check_* functions take the TXT strings and need no
 network access.
 """
 
@@ -109,3 +109,44 @@ def check_dmarc(found_on, txt_strings):
     if problems:
         return Finding("dmarc", WARN, f"_dmarc.{found_on}: " + "; ".join(problems) + f": {record}")
     return Finding("dmarc", PASS, f"_dmarc.{found_on}: {record}")
+
+
+# Selectors used by common mail providers: Google Workspace, Microsoft 365
+# (selector1/2), Mailchimp/Mandrill (k1), SendGrid (s1/s2), Cloudflare Email
+# Routing (cf2024-1) and frequent self-hosted defaults.
+COMMON_DKIM_SELECTORS = ("google", "selector1", "selector2", "k1", "s1", "s2", "default", "dkim", "mail", "cf2024-1")
+
+
+def parse_dkim_key(txt_strings):
+    """Return the p= value of the first DKIM key record, or None if there is none.
+
+    Only records with a p= tag count, so unrelated TXT records (or wildcard
+    TXT answers) are not mistaken for a key. An empty p= means a revoked key.
+    """
+    for txt in txt_strings:
+        tags = parse_dmarc_tags(txt)
+        if "p" in tags:
+            return tags["p"].replace(" ", "")
+    return None
+
+
+def check_dkim(domain, keys, explicit):
+    """keys maps each selector tried to its p= value ('' revoked) or None (no key).
+
+    explicit is True when the user named the selectors, so a missing one is
+    reported directly. Otherwise only common selectors were guessed, and not
+    finding a key does not prove DKIM is absent.
+    """
+    active = [sel for sel, key in keys.items() if key]
+    revoked = [sel for sel, key in keys.items() if key == ""]
+    missing = [sel for sel, key in keys.items() if key is None]
+    if explicit and (missing or revoked):
+        problems = [f"no DKIM key at {sel}._domainkey.{domain}" for sel in missing]
+        problems += [f"the key at {sel}._domainkey.{domain} is revoked (empty p=)" for sel in revoked]
+        return Finding("dkim", WARN, "; ".join(problems))
+    if active:
+        return Finding("dkim", PASS, f"DKIM key published for {domain} under: {', '.join(active)}")
+    tried = ", ".join(keys)
+    if revoked:
+        return Finding("dkim", WARN, f"only revoked keys (empty p=) under common selectors ({', '.join(revoked)}); fine if {domain} sends no mail, otherwise its active key uses another selector, which --dkim-selector can check")
+    return Finding("dkim", WARN, f"no DKIM key under common selectors ({tried}); DKIM may still use another selector, which --dkim-selector can check")

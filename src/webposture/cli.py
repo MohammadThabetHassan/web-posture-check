@@ -126,6 +126,19 @@ def check_dmarc(url, timeout):
     return emailauth.check_dmarc(None, [])
 
 
+def check_dkim(url, timeout, selectors=None):
+    """Look for DKIM keys under the given selectors, or under common ones when none are given."""
+    domain = emailauth.mail_domain(urlsplit(url).hostname)
+    explicit = bool(selectors)
+    keys = {}
+    for selector in selectors or emailauth.COMMON_DKIM_SELECTORS:
+        txt, problem = emailauth.lookup_txt(f"{selector}._domainkey.{domain}", timeout)
+        if problem:
+            return Finding("dkim", WARN, problem)
+        keys[selector] = emailauth.parse_dkim_key(txt)
+    return emailauth.check_dkim(domain, keys, explicit)
+
+
 def normalise_target(target):
     if "://" not in target:
         target = "https://" + target
@@ -140,6 +153,8 @@ def main(argv=None):
     parser.add_argument("target", help="domain or URL, e.g. example.com or https://example.com/login")
     parser.add_argument("--json", action="store_true", help="print findings as JSON")
     parser.add_argument("--timeout", type=float, default=10.0, help="request timeout in seconds (default 10)")
+    parser.add_argument("--dkim-selector", action="append", metavar="SELECTOR",
+                        help="DKIM selector to check (repeatable); by default common selectors are tried")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     args = parser.parse_args(argv)
 
@@ -168,6 +183,7 @@ def main(argv=None):
     findings.append(check_security_txt(final_url, args.timeout))
     findings.append(check_spf(final_url, args.timeout))
     findings.append(check_dmarc(final_url, args.timeout))
+    findings.append(check_dkim(final_url, args.timeout, args.dkim_selector))
     http_url = transport.http_url_for(url)
     findings.append(transport.check_https_redirect(http_url, fetch_final_url(http_url, args.timeout)))
 

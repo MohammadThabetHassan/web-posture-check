@@ -121,5 +121,37 @@ class DmarcTest(unittest.TestCase):
         self.assertEqual(f.status, PASS)
 
 
+
+class DkimTest(unittest.TestCase):
+    def test_parse_key_ignores_non_dkim_txt(self):
+        self.assertIsNone(emailauth.parse_dkim_key(["google-site-verification=abc"]))
+        self.assertEqual(emailauth.parse_dkim_key(["v=DKIM1; k=rsa; p=MIGf MA0"]), "MIGfMA0")
+        self.assertEqual(emailauth.parse_dkim_key(["v=DKIM1; p="]), "")
+
+    def test_active_key_passes_and_names_selectors(self):
+        f = emailauth.check_dkim("example.com", {"google": "MIIB", "selector1": None}, explicit=False)
+        self.assertEqual(f.status, PASS)
+        self.assertIn("under: google", f.detail)
+
+    def test_nothing_found_under_common_selectors_is_unknown_not_a_failure(self):
+        f = emailauth.check_dkim("example.com", {"google": None, "k1": None}, explicit=False)
+        self.assertEqual(f.status, WARN)
+        self.assertIn("may still use another selector", f.detail)
+
+    def test_only_revoked_keys_warns(self):
+        f = emailauth.check_dkim("example.com", {"google": "", "k1": None}, explicit=False)
+        self.assertEqual(f.status, WARN)
+        self.assertIn("only revoked keys", f.detail)
+
+    def test_explicit_selector_missing_or_revoked_is_reported(self):
+        f = emailauth.check_dkim("example.com", {"mysel": None, "old": ""}, explicit=True)
+        self.assertEqual(f.status, WARN)
+        self.assertIn("no DKIM key at mysel._domainkey.example.com", f.detail)
+        self.assertIn("old._domainkey.example.com is revoked", f.detail)
+
+    def test_explicit_selector_found_passes(self):
+        self.assertEqual(emailauth.check_dkim("example.com", {"mysel": "MIIB"}, explicit=True).status, PASS)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -75,5 +75,25 @@ class DmarcFallbackTest(unittest.TestCase):
         self.assertIn("_dmarc.google.com", finding.detail)
 
 
+class DkimSelectorTest(unittest.TestCase):
+    """--dkim-selector checks only the given selectors, not the common guesses. No network."""
+
+    def test_only_given_selectors_are_queried(self):
+        looked_up = []
+
+        def fake_lookup(name, timeout):
+            looked_up.append(name)
+            if name == "custom._domainkey.example.com":
+                return ["v=DKIM1; p=MIIBkey"], None
+            return [], None
+
+        with mock.patch.object(emailauth, "lookup_txt", side_effect=fake_lookup):
+            finding = cli.check_dkim("https://example.com/", 5, selectors=["custom"])
+        self.assertEqual(finding.status, "PASS")
+        self.assertIn("custom", finding.detail)
+        # The common selectors must not be probed once a selector is given.
+        self.assertEqual(looked_up, ["custom._domainkey.example.com"])
+
+
 if __name__ == "__main__":
     unittest.main()
