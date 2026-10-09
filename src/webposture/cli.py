@@ -7,7 +7,7 @@ import urllib.request
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
-from . import __version__, caa, cookies, cors, emailauth, headers, securitytxt, tls, transport
+from . import __version__, caa, cookies, cors, emailauth, headers, markdown, securitytxt, tls, transport
 from .findings import FAIL, WARN, Finding
 
 USER_AGENT = f"web-posture-check/{__version__}"
@@ -178,7 +178,11 @@ def main(argv=None):
                     "security.txt, DNS (CAA, SPF, DMARC, DKIM) and the HTTPS redirect.",
     )
     parser.add_argument("target", help="domain or URL, e.g. example.com or https://example.com/login")
-    parser.add_argument("--json", action="store_true", help="print findings as JSON")
+    output = parser.add_mutually_exclusive_group()
+    output.add_argument("--format", choices=("text", "json", "markdown"), default="text",
+                        help="output format (default text); markdown is a table for tickets and pull requests")
+    output.add_argument("--json", action="store_const", const="json", dest="format",
+                        help="same as --format json")
     parser.add_argument("--timeout", type=float, default=10.0, help="request timeout in seconds (default 10)")
     parser.add_argument("--dkim-selector", action="append", metavar="SELECTOR",
                         help="DKIM selector to check (repeatable); by default common selectors are tried")
@@ -235,11 +239,14 @@ def main(argv=None):
 
 
 def report(args, url, status, findings, note=None):
-    if args.json:
+    if args.format == "json":
         result = {"url": url, "status": status, "findings": [f.to_dict() for f in findings]}
         if note:
             result["note"] = note
         print(json.dumps(result, indent=2))
+        return
+    if args.format == "markdown":
+        print(markdown.render(url, status, findings, __version__, datetime.now(timezone.utc), note=note), end="")
         return
     print(f"Target: {url} ({f'HTTP {status}' if status is not None else 'no HTTP response'})")
     for f in findings:
