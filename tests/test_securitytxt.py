@@ -25,6 +25,14 @@ class SecurityTxtTest(unittest.TestCase):
             self.assertEqual(f.status, WARN, status)
             self.assertIn("no /.well-known/security.txt", f.detail)
 
+    def test_non_404_error_status_warns_with_the_status(self):
+        # A 403 or 500 on the path is not the same as a missing file (some WAFs
+        # block /.well-known/); report the status rather than the fields.
+        for status in (403, 500):
+            f = check(body="", status=status)
+            self.assertEqual(f.status, WARN, status)
+            self.assertIn(f"returned HTTP {status}", f.detail)
+
     def test_html_catch_all_page_is_not_accepted(self):
         f = check(body="<html>Contact: x</html>", content_type="text/html; charset=utf-8")
         self.assertEqual(f.status, WARN)
