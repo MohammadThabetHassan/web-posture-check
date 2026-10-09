@@ -5,6 +5,12 @@ from unittest import mock
 from webposture import caa
 from webposture.findings import PASS, WARN
 
+try:
+    import dns.resolver  # noqa: F401
+    HAVE_DNSPYTHON = True
+except ImportError:
+    HAVE_DNSPYTHON = False
+
 
 class CheckCaaTest(unittest.TestCase):
     def test_no_record_warns(self):
@@ -54,6 +60,27 @@ class LookupCaaTest(unittest.TestCase):
             found_on, records, problem = caa.lookup_caa("example.com", 5)
         self.assertIsNone(found_on)
         self.assertIn("web-posture-check[dns]", problem)
+
+    @unittest.skipUnless(HAVE_DNSPYTHON, "needs the optional dns extra")
+    def test_climbs_to_parent_when_host_has_no_caa(self):
+        # RFC 8659 section 3: the host has no CAA RRset, so the lookup must climb
+        # to the parent and report the record it finds there, naming the parent.
+        import dns.resolver
+
+        class _Caa:
+            def __init__(self, flags, tag, value):
+                self.flags, self.tag, self.value = flags, tag, value
+
+        def fake_resolve(name, rdtype, lifetime=None):
+            if name == "example.com":
+                return [_Caa(0, b"issue", b"letsencrypt.org")]
+            raise dns.resolver.NoAnswer()
+
+        with mock.patch("dns.resolver.resolve", side_effect=fake_resolve):
+            found_on, records, problem = caa.lookup_caa("www.example.com", 5)
+        self.assertIsNone(problem)
+        self.assertEqual(found_on, "example.com")
+        self.assertEqual(records, [(0, "issue", "letsencrypt.org")])
 
 
 if __name__ == "__main__":
