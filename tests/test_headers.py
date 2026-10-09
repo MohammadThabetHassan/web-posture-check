@@ -31,6 +31,7 @@ class HeaderChecksTest(unittest.TestCase):
         self.assertEqual(results["referrer-policy"], WARN)
         self.assertEqual(results["permissions-policy"], WARN)
         self.assertEqual(results["cross-origin-isolation"], WARN)
+        self.assertEqual(results["x-xss-protection"], PASS)
         self.assertEqual(results["information-leakage"], PASS)
 
     def test_short_hsts_max_age_warns(self):
@@ -250,6 +251,21 @@ class HeaderChecksTest(unittest.TestCase):
             "Cross-Origin-Embedder-Policy": "credentialless",
         })
         self.assertIn("cross-origin isolated", f.detail)
+
+    def test_x_xss_protection_disabled_passes(self):
+        for value in ("0", " 0 "):
+            self.assertEqual(headers.check_x_xss_protection({"X-XSS-Protection": value}).status, PASS, value)
+
+    def test_x_xss_protection_enabled_warns(self):
+        for value in ("1", "1; mode=block", "1; report=https://example.com/r"):
+            f = headers.check_x_xss_protection({"x-xss-protection": value})
+            self.assertEqual(f.status, WARN, value)
+            self.assertIn("legacy XSS auditor", f.detail)
+
+    def test_x_xss_protection_invalid_value_warns(self):
+        f = headers.check_x_xss_protection({"X-XSS-Protection": "yes"})
+        self.assertEqual(f.status, WARN)
+        self.assertIn("not a valid value", f.detail)
 
     def test_x_frame_options_accepted_without_csp(self):
         f = headers.check_framing({"X-Frame-Options": "sameorigin"})

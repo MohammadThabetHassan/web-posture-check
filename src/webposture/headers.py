@@ -130,6 +130,23 @@ def check_permissions_policy(headers):
     return Finding("permissions-policy", PASS, "Permissions-Policy is set")
 
 
+def check_x_xss_protection(headers):
+    """X-XSS-Protection drove the old browser XSS auditor, which every current browser
+    has removed. In browsers that still have it, enabling it ('1', '1; mode=block')
+    could be abused to detect or block content on the page (XS-Leaks), so OWASP
+    recommends '0' or omitting the header and relying on Content-Security-Policy.
+    """
+    value = _get(headers, "X-XSS-Protection")
+    if value is None:
+        return Finding("x-xss-protection", PASS, "not set (rely on Content-Security-Policy)")
+    token = value.split(";", 1)[0].strip()
+    if token == "0":
+        return Finding("x-xss-protection", PASS, "0 (legacy XSS auditor disabled)")
+    if token == "1":
+        return Finding("x-xss-protection", WARN, f"'{value}' enables the legacy XSS auditor, which can be abused for XS-Leaks; set it to 0 or remove it")
+    return Finding("x-xss-protection", WARN, f"'{value}' is not a valid value; set it to 0 or remove it")
+
+
 def _policy_token(value):
     """First token of a policy header, e.g. 'same-origin; report-to="x"' -> 'same-origin'."""
     return value.split(";", 1)[0].strip().lower() if value else None
@@ -204,6 +221,7 @@ ALL_CHECKS = [
     check_referrer_policy,
     check_permissions_policy,
     check_cross_origin_isolation,
+    check_x_xss_protection,
     check_information_leakage,
 ]
 
