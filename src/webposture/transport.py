@@ -1,12 +1,12 @@
-"""Transport checks: is the site only reachable over HTTPS?
+"""Transport checks: is the site only reachable over HTTPS, and did it answer normally?
 
-The check functions take the result of a plain-HTTP request and return a
-Finding, so they can be tested without network access.
+The check functions take request results (a final URL or a status code) and
+return a Finding, so they can be tested without network access.
 """
 
 from urllib.parse import urlsplit, urlunsplit
 
-from .findings import Finding, PASS, FAIL
+from .findings import Finding, PASS, WARN, FAIL
 
 
 def http_url_for(url):
@@ -34,3 +34,15 @@ def check_https_redirect(http_url, final_url):
     if urlsplit(final_url).scheme == "https":
         return Finding("https-redirect", PASS, f"{http_url} redirects to {final_url}")
     return Finding("https-redirect", FAIL, f"{http_url} is served over plain HTTP without redirecting to HTTPS")
+
+
+def check_status(status):
+    """Flag an error response, because every other check then describes the error page.
+
+    Bot protection often answers unknown clients with 403 or 429 while browsers
+    get the real page, so the header results may not match what users receive.
+    """
+    if status < 400:
+        return Finding("http-status", PASS, f"final response is HTTP {status}")
+    hint = " (often bot protection blocking automated clients)" if status in (403, 429, 503) else ""
+    return Finding("http-status", WARN, f"final response is HTTP {status}{hint}; the other findings describe this error page, not the site's normal pages")

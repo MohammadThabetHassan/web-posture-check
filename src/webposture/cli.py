@@ -11,7 +11,7 @@ USER_AGENT = f"web-posture-check/{__version__}"
 
 
 def fetch_headers(url, timeout, extra_headers=None):
-    """Return (final URL, headers dict, list of Set-Cookie values).
+    """Return (final URL, headers dict, list of Set-Cookie values, HTTP status).
 
     Set-Cookie is returned separately because a response can carry several,
     and folding headers into a dict keeps only one of them.
@@ -19,10 +19,10 @@ def fetch_headers(url, timeout, extra_headers=None):
     request = urllib.request.Request(url, method="GET", headers={"User-Agent": USER_AGENT, **(extra_headers or {})})
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return response.geturl(), dict(response.headers.items()), response.headers.get_all("Set-Cookie") or []
+            return response.geturl(), dict(response.headers.items()), response.headers.get_all("Set-Cookie") or [], response.status
     except urllib.error.HTTPError as err:
         # Error pages still carry the site's headers, so check them anyway.
-        return err.geturl(), dict(err.headers.items()), err.headers.get_all("Set-Cookie") or []
+        return err.geturl(), dict(err.headers.items()), err.headers.get_all("Set-Cookie") or [], err.code
 
 
 class _RedirectRecorder(urllib.request.HTTPRedirectHandler):
@@ -58,7 +58,7 @@ def fetch_final_url(url, timeout):
 def probe_cors(url, timeout):
     """Request url as if from a foreign origin and check what CORS allows."""
     try:
-        _, probe_headers, _ = fetch_headers(url, timeout, {"Origin": cors.PROBE_ORIGIN})
+        _, probe_headers, _, _ = fetch_headers(url, timeout, {"Origin": cors.PROBE_ORIGIN})
     except (urllib.error.URLError, OSError) as err:
         return Finding("cors", WARN, f"could not run the CORS probe: {err}")
     lowered = {k.lower(): v for k, v in probe_headers.items()}
@@ -84,21 +84,23 @@ def main(argv=None):
 
     url = normalise_target(args.target)
     try:
-        final_url, response_headers, set_cookies = fetch_headers(url, args.timeout)
+        final_url, response_headers, set_cookies, status = fetch_headers(url, args.timeout)
     except (urllib.error.URLError, OSError) as err:
         print(f"error: could not fetch {url}: {err}", file=sys.stderr)
         return 2
 
-    findings = headers.run(response_headers)
+    # The status goes first: when it is an error page, every finding below describes that page.
+    findings = [transport.check_status(status)]
+    findings += headers.run(response_headers)
     findings.append(cookies.check_cookies(set_cookies, final_url.startswith("https://")))
     findings.append(probe_cors(final_url, args.timeout))
     http_url = transport.http_url_for(url)
     findings.append(transport.check_https_redirect(http_url, fetch_final_url(http_url, args.timeout)))
 
     if args.json:
-        print(json.dumps({"url": final_url, "findings": [f.to_dict() for f in findings]}, indent=2))
+        print(json.dumps({"url": final_url, "status": status, "findings": [f.to_dict() for f in findings]}, indent=2))
     else:
-        print(f"Target: {final_url}")
+        print(f"Target: {final_url} (HTTP {status})")
         for f in findings:
             print(f"  [{f.status:4}] {f.check}: {f.detail}")
 
