@@ -1,0 +1,41 @@
+name: Action
+
+# Exercises action.yml from this checkout on every change, so the action
+# is tested the way other repositories will use it.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  passing-run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checks that pass on github.com
+        uses: ./
+        with:
+          targets: github.com
+          args: --only http-status,hsts,tls-certificate,caa
+
+  failing-run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: A check that fails on example.com (no HSTS)
+        id: scan
+        uses: ./
+        continue-on-error: true
+        with:
+          targets: example.com
+          args: --only hsts
+          dns: "false"
+      - name: The action must have failed the step
+        env:
+          OUTCOME: ${{ steps.scan.outcome }}
+        run: |
+          echo "outcome: $OUTCOME"
+          test "$OUTCOME" = "failure"
