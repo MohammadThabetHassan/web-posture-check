@@ -68,6 +68,53 @@ class HeaderChecksTest(unittest.TestCase):
         f = headers.check_csp({"Content-Security-Policy-Report-Only": "default-src 'self'"})
         self.assertEqual(f.status, WARN)
 
+    def test_csp_unsafe_inline_in_script_src_warns(self):
+        f = headers.check_csp({"Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline'"})
+        self.assertEqual(f.status, WARN)
+        self.assertIn("script-src allows 'unsafe-inline'", f.detail)
+
+    def test_csp_unsafe_inline_with_nonce_passes(self):
+        f = headers.check_csp({"Content-Security-Policy": "script-src 'self' 'unsafe-inline' 'nonce-abc123'"})
+        self.assertEqual(f.status, PASS)
+
+    def test_csp_unsafe_inline_with_hash_passes(self):
+        f = headers.check_csp({"Content-Security-Policy": "script-src 'self' 'unsafe-inline' 'sha256-AbCd='"})
+        self.assertEqual(f.status, PASS)
+
+    def test_csp_falls_back_to_default_src(self):
+        f = headers.check_csp({"Content-Security-Policy": "default-src 'self' 'unsafe-inline'"})
+        self.assertEqual(f.status, WARN)
+        self.assertIn("default-src", f.detail)
+
+    def test_csp_script_src_overrides_default_src(self):
+        f = headers.check_csp({"Content-Security-Policy": "default-src 'self' 'unsafe-inline'; script-src 'self'"})
+        self.assertEqual(f.status, PASS)
+
+    def test_csp_duplicate_script_src_uses_first_occurrence(self):
+        # Browsers honour the first occurrence of a directive and ignore later
+        # duplicates, so a later safe script-src must not mask an earlier unsafe
+        # one. Guards against a last-wins regression that would be a silent
+        # false negative on a real XSS exposure.
+        f = headers.check_csp({"Content-Security-Policy": "script-src 'unsafe-inline'; script-src 'self'"})
+        self.assertEqual(f.status, WARN)
+        self.assertIn("'unsafe-inline'", f.detail)
+
+    def test_csp_unsafe_eval_warns_even_with_nonce(self):
+        f = headers.check_csp({"Content-Security-Policy": "script-src 'nonce-abc123' 'unsafe-eval'"})
+        self.assertEqual(f.status, WARN)
+        self.assertIn("'unsafe-eval'", f.detail)
+
+    def test_csp_reports_both_problems(self):
+        f = headers.check_csp({"Content-Security-Policy": "script-src 'unsafe-inline' 'unsafe-eval'"})
+        self.assertEqual(f.status, WARN)
+        self.assertIn("'unsafe-inline'", f.detail)
+        self.assertIn("'unsafe-eval'", f.detail)
+
+    def test_csp_without_script_directives_says_scripts_unrestricted(self):
+        f = headers.check_csp({"Content-Security-Policy": "frame-ancestors 'none'"})
+        self.assertEqual(f.status, PASS)
+        self.assertIn("not restricted", f.detail)
+
     def test_x_frame_options_accepted_without_csp(self):
         f = headers.check_framing({"X-Frame-Options": "sameorigin"})
         self.assertEqual(f.status, PASS)

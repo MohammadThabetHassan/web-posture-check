@@ -50,7 +50,7 @@ This makes it easy to use as a gate in CI.
 | Check | FAIL when | WARN when |
 |-------|-----------|-----------|
 | `hsts` | `Strict-Transport-Security` missing or has no `max-age` | `max-age` is below 6 months, or `preload` is set without the preload list's requirements (`max-age` of at least 1 year and `includeSubDomains`) |
-| `csp` | `Content-Security-Policy` missing | only `Content-Security-Policy-Report-Only` is set |
+| `csp` | `Content-Security-Policy` missing | only `Content-Security-Policy-Report-Only` is set; or the script policy (`script-src`, else `default-src`) allows `'unsafe-inline'` without a nonce or hash, or allows `'unsafe-eval'` |
 | `x-content-type-options` | missing or not `nosniff` | |
 | `clickjacking` | no CSP `frame-ancestors` and no `X-Frame-Options: DENY/SAMEORIGIN` | |
 | `referrer-policy` | set to `unsafe-url` | missing |

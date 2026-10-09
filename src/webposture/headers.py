@@ -53,7 +53,37 @@ def check_csp(headers):
         if _get(headers, "Content-Security-Policy-Report-Only") is not None:
             return Finding("csp", WARN, "only Content-Security-Policy-Report-Only is set, nothing is enforced")
         return Finding("csp", FAIL, "Content-Security-Policy header is missing")
+    sources, directive = _script_sources(value)
+    if sources is None:
+        return Finding("csp", PASS, "Content-Security-Policy is set (no script-src or default-src, scripts are not restricted)")
+    problems = []
+    # Browsers ignore 'unsafe-inline' when a nonce or hash is present (CSP Level 2+),
+    # so it is only a problem on its own.
+    has_nonce_or_hash = any(s.startswith(("'nonce-", "'sha256-", "'sha384-", "'sha512-")) for s in sources)
+    if "'unsafe-inline'" in sources and not has_nonce_or_hash:
+        problems.append(f"{directive} allows 'unsafe-inline' without a nonce or hash")
+    if "'unsafe-eval'" in sources:
+        problems.append(f"{directive} allows 'unsafe-eval'")
+    if problems:
+        return Finding("csp", WARN, "; ".join(problems))
     return Finding("csp", PASS, "Content-Security-Policy is set")
+
+
+def _script_sources(policy):
+    """Return (sources, directive name) that govern scripts, or (None, None).
+
+    script-src applies when present, otherwise default-src is the fallback.
+    The first occurrence of a directive wins, as in browsers.
+    """
+    directives = {}
+    for part in policy.split(";"):
+        tokens = part.split()
+        if tokens and tokens[0].lower() not in directives:
+            directives[tokens[0].lower()] = [t.lower() for t in tokens[1:]]
+    for name in ("script-src", "default-src"):
+        if name in directives:
+            return directives[name], name
+    return None, None
 
 
 def check_content_type_options(headers):
