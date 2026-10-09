@@ -2,7 +2,7 @@
 
 A small command-line tool that checks a website's security posture and tells you what to fix. The core has no third-party dependencies.
 
-It checks HTTP security headers, cookie flags, CORS, the TLS certificate, deprecated TLS versions, `security.txt`, the domain's SPF and DMARC records, and that plain HTTP redirects to HTTPS. DKIM and more are on the roadmap.
+It checks HTTP security headers, cookie flags, CORS, the TLS certificate, deprecated TLS versions, `security.txt`, the domain's SPF, DMARC and DKIM records, and that plain HTTP redirects to HTTPS.
 
 ## Install
 
@@ -14,7 +14,7 @@ pip install .
 
 Requires Python 3.9 or newer.
 
-The SPF and DMARC checks read DNS TXT records, which the standard library cannot do. Install the optional DNS support to enable them; without it they are reported as skipped:
+The SPF, DMARC and DKIM checks read DNS TXT records, which the standard library cannot do. Install the optional DNS support to enable them; without it they are reported as skipped:
 
 ```bash
 pip install ".[dns]"
@@ -25,6 +25,7 @@ pip install ".[dns]"
 ```bash
 web-posture-check example.com
 web-posture-check https://example.com/login --json
+web-posture-check example.com --dkim-selector s1 --dkim-selector s2
 ```
 
 A bare domain is fetched over `https://`. The final HTTP status is shown next to the target and included as `status` in the `--json` output. Redirects are followed and the headers of the final response are checked. The same host and path are then requested over `http://` (default port) to see whether it redirects to HTTPS.
@@ -50,6 +51,7 @@ Target: https://example.com (HTTP 200)
   [WARN] security-txt: no /.well-known/security.txt, so researchers have no published way to report vulnerabilities
   [PASS] spf: example.com: v=spf1 -all
   [PASS] dmarc: _dmarc.example.com: v=DMARC1;p=reject;sp=reject;adkim=s;aspf=s
+  [WARN] dkim: only revoked keys (empty p=) under common selectors (google, selector1, selector2, k1, s1, s2, default, dkim, mail, cf2024-1); fine if example.com sends no mail, otherwise its active key uses another selector, which --dkim-selector can check
   [FAIL] https-redirect: http://example.com/ is served over plain HTTP without redirecting to HTTPS
 ```
 
@@ -86,6 +88,7 @@ If the target's certificate is expired or not trusted, that is reported as a `tl
 | `security-txt` | | `/.well-known/security.txt` is missing, not served as `text/plain`, lacks the required `Contact` or `Expires` field, has an invalid, expired or duplicate `Expires`, or `Expires` is more than a year away (RFC 9116 recommends less) |
 | `spf` | the domain has more than one SPF record (receivers then ignore SPF), or the record ends in `+all`/`all`, which authorises every server | there is no SPF record, it ends in `?all`, it has no `all` mechanism and no `redirect=`, or the DNS lookup could not be done |
 | `dmarc` | the domain has more than one DMARC record (receivers then apply no policy) | there is no DMARC record, `p=none` (monitoring only), `p=` is missing or invalid, or `pct=` is below 100 |
+| `dkim` | | no key is found under the common selectors (or only revoked keys with an empty `p=`), or a selector given with `--dkim-selector` has no key or a revoked one. Selectors cannot be listed from outside, so not finding one under a guessed name is reported as unknown, never as a failure |
 | `https-redirect` | the `http://` URL answers without ending up on `https://` after redirects | |
 
 If nothing answers on plain HTTP at all, `https-redirect` passes, since no content is served without TLS.
@@ -94,7 +97,7 @@ If nothing answers on plain HTTP at all, `https-redirect` passes, since no conte
 
 To test TLS versions, a separate handshake is attempted that allows only TLS 1.0, then only TLS 1.1. OpenSSL 3 will not offer those versions at its default security level, so the probe lowers it for that connection only. If the local OpenSSL still cannot offer a version, the result is a warning, never a false pass.
 
-SPF and DMARC are read for the site's domain with a leading `www.` removed, so `www.example.com` is checked as `example.com`. If a subdomain has no `_dmarc` record, the check falls back to its parent domains (down to two labels), as receivers do for the organizational domain.
+SPF, DMARC and DKIM are read for the site's domain with a leading `www.` removed, so `www.example.com` is checked as `example.com`. DKIM is looked up at `<selector>._domainkey.<domain>` for common provider selectors (Google Workspace, Microsoft 365, Mailchimp, SendGrid, Cloudflare Email Routing and frequent defaults), or only for the selectors given with `--dkim-selector`. If a subdomain has no `_dmarc` record, the check falls back to its parent domains (down to two labels), as receivers do for the organizational domain.
 
 To test CORS, the page is requested a second time with `Origin: https://web-posture-check.invalid`. The `.invalid` domain is reserved (RFC 2606) and cannot exist, so a site that allows it will allow any website.
 
