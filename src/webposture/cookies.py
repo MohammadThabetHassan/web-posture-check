@@ -25,11 +25,38 @@ def parse_set_cookie(value):
     return name, attributes
 
 
-def _problems(attributes, is_https):
+def _prefix_violations(name, attributes):
+    """Return the rules a __Host- or __Secure- cookie breaks, or [] if none.
+
+    Browsers drop such cookies outright, so a broken prefix means the cookie
+    never gets set. Prefixes are matched case-insensitively, as current
+    browsers do (draft-ietf-httpbis-rfc6265bis).
+    """
+    lower = name.lower()
+    violations = []
+    if lower.startswith("__host-"):
+        if "secure" not in attributes:
+            violations.append("Secure")
+        if attributes.get("path") != "/":
+            violations.append("Path=/")
+        # An empty Domain= is ignored by browsers (RFC 6265, section 5.2.3),
+        # so only a Domain with a value breaks the __Host- rule.
+        if attributes.get("domain"):
+            violations.append("no Domain")
+    elif lower.startswith("__secure-") and "secure" not in attributes:
+        violations.append("Secure")
+    return violations
+
+
+def _problems(name, attributes, is_https):
     """Return a list of (status, message) for one cookie."""
     problems = []
     samesite = attributes.get("samesite")
-    if "secure" not in attributes:
+    violations = _prefix_violations(name, attributes)
+    if violations:
+        prefix = name.split("-", 1)[0] + "-"
+        problems.append((FAIL, f"{prefix} prefix requires " + ", ".join(violations) + " (browsers reject it)"))
+    if "secure" not in attributes and "Secure" not in violations:
         if samesite is not None and samesite.lower() == "none":
             # Browsers reject SameSite=None without Secure, so the cookie is dropped.
             problems.append((FAIL, "SameSite=None without Secure (browsers reject it)"))
@@ -79,7 +106,7 @@ def check_cookies(set_cookie_values, is_https, now=None):
     status = PASS
     notes = []
     for name, attributes in live:
-        problems = _problems(attributes, is_https)
+        problems = _problems(name, attributes, is_https)
         if problems:
             notes.append(f"{name}: " + ", ".join(msg for _, msg in problems))
             status = max([status] + [s for s, _ in problems], key=_RANK.get)

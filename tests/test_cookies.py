@@ -82,6 +82,56 @@ class CheckCookiesTest(unittest.TestCase):
         self.assertNotIn("old:", f.detail)
         self.assertIn("sid: missing Secure", f.detail)
 
+    def test_valid_host_prefix_passes(self):
+        f = cookies.check_cookies(["__Host-sid=1; Path=/; Secure; HttpOnly; SameSite=Lax"], is_https=True)
+        self.assertEqual(f.status, PASS)
+
+    def test_valid_prefix_still_gets_flag_review(self):
+        # A valid prefix does not exempt a cookie from the ordinary flag review:
+        # this __Host- cookie satisfies the prefix rules but is missing HttpOnly,
+        # so it must still warn (cf. the live __Host-GAPS / __Secure-STRP cases).
+        f = cookies.check_cookies(["__Host-sid=1; Path=/; Secure; SameSite=Lax"], is_https=True)
+        self.assertEqual(f.status, WARN)
+        self.assertIn("missing HttpOnly", f.detail)
+
+    def test_host_prefix_with_domain_fails(self):
+        f = cookies.check_cookies(["__Host-sid=1; Path=/; Domain=example.com; Secure; HttpOnly; SameSite=Lax"], is_https=True)
+        self.assertEqual(f.status, FAIL)
+        self.assertIn("__Host-sid: __Host- prefix requires no Domain", f.detail)
+
+    def test_host_prefix_lists_every_violation(self):
+        f = cookies.check_cookies(["__Host-sid=1; Path=/app; HttpOnly; SameSite=Lax"], is_https=True)
+        self.assertEqual(f.status, FAIL)
+        self.assertIn("requires Secure, Path=/ (browsers reject it)", f.detail)
+        # The prefix message already covers Secure, so it is not repeated.
+        self.assertNotIn("missing Secure", f.detail)
+
+    def test_host_prefix_with_empty_domain_passes(self):
+        # Browsers ignore an empty Domain attribute, so the cookie stays host-only.
+        for value in ("__Host-sid=1; Path=/; Domain=; Secure; HttpOnly; SameSite=Lax",
+                      "__Host-sid=1; Path=/; Domain; Secure; HttpOnly; SameSite=Lax"):
+            f = cookies.check_cookies([value], is_https=True)
+            self.assertEqual(f.status, PASS, value)
+
+    def test_host_prefix_without_path_fails(self):
+        f = cookies.check_cookies(["__Host-sid=1; Secure; HttpOnly; SameSite=Lax"], is_https=True)
+        self.assertEqual(f.status, FAIL)
+        self.assertIn("Path=/", f.detail)
+
+    def test_secure_prefix_without_secure_fails_even_over_http(self):
+        f = cookies.check_cookies(["__Secure-id=1; HttpOnly; SameSite=Lax"], is_https=False)
+        self.assertEqual(f.status, FAIL)
+        self.assertIn("__Secure- prefix requires Secure", f.detail)
+
+    def test_secure_prefix_allows_domain_and_any_path(self):
+        f = cookies.check_cookies(["__Secure-id=1; Domain=example.com; Path=/app; Secure; HttpOnly; SameSite=Lax"], is_https=True)
+        self.assertEqual(f.status, PASS)
+
+    def test_prefix_match_is_case_insensitive(self):
+        f = cookies.check_cookies(["__HOST-sid=1; Path=/; Domain=example.com; Secure; HttpOnly; SameSite=Lax"], is_https=True)
+        self.assertEqual(f.status, FAIL)
+        self.assertIn("__HOST- prefix requires no Domain", f.detail)
+
     def test_worst_status_wins_and_every_cookie_is_listed(self):
         f = cookies.check_cookies(
             ["good=1; Secure; HttpOnly; SameSite=Strict", "a=1; Secure", "b=1; HttpOnly; SameSite=Lax"],
