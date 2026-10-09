@@ -24,6 +24,15 @@ class CheckCorsTest(unittest.TestCase):
     def test_credentials_value_is_case_insensitive(self):
         self.assertEqual(cors.check_cors(PROBE, "TRUE").status, FAIL)
 
+    def test_credentials_only_true_escalates_to_fail(self):
+        # Browsers enable credentials only on the exact value "true", so a
+        # reflected origin with any other Allow-Credentials value is a WARN,
+        # not a FAIL. Guards against a truthy check that would escalate a
+        # non-"true" value (e.g. "false") into a false high-severity finding.
+        f = cors.check_cors(PROBE, "false")
+        self.assertEqual(f.status, WARN)
+        self.assertIn("without credentials", f.detail)
+
     def test_null_origin_with_credentials_fails(self):
         f = cors.check_cors("null", "true")
         self.assertEqual(f.status, FAIL)
