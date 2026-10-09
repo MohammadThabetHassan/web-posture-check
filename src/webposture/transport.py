@@ -15,7 +15,12 @@ def http_url_for(url):
     An explicit port is dropped because it belongs to the HTTPS service.
     """
     parts = urlsplit(url)
-    return urlunsplit(("http", parts.hostname or "", parts.path or "/", parts.query, ""))
+    host = parts.hostname or ""
+    if ":" in host:
+        # An IPv6 literal must keep its brackets, or the rebuilt URL is
+        # malformed and the plain-HTTP request silently fails.
+        host = f"[{host}]"
+    return urlunsplit(("http", host, parts.path or "/", parts.query, ""))
 
 
 def check_https_redirect(http_url, final_url):

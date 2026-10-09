@@ -14,6 +14,15 @@ class HttpUrlTest(unittest.TestCase):
     def test_drops_https_port(self):
         self.assertEqual(transport.http_url_for("https://example.com:8443/app"), "http://example.com/app")
 
+    def test_ipv6_host_keeps_brackets(self):
+        # Without brackets the rebuilt URL is malformed: urlsplit would read the
+        # host as "2606" and the plain-HTTP request would fail, wrongly passing
+        # the check. The literal must stay bracketed.
+        self.assertEqual(
+            transport.http_url_for("https://[2606:2800:220:1::1]:8443/app"),
+            "http://[2606:2800:220:1::1]/app",
+        )
+
 
 class HttpsRedirectTest(unittest.TestCase):
     def test_redirect_to_https_passes(self):
