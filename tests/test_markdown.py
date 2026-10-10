@@ -4,7 +4,7 @@ from contextlib import redirect_stdout
 from datetime import datetime, timezone
 from unittest import mock
 
-from webposture import cli, markdown
+from webposture import cli, fetch, markdown
 from webposture.findings import FAIL, PASS, WARN, Finding
 
 WHEN = datetime(2026, 10, 10, 9, 30, tzinfo=timezone.utc)
@@ -58,7 +58,7 @@ class RenderTest(unittest.TestCase):
 class FormatOptionTest(unittest.TestCase):
     def _run(self, *argv):
         out = io.StringIO()
-        with mock.patch.object(cli, "fetch_headers", return_value=("https://example.com/", {}, [], 200)), \
+        with mock.patch.object(fetch, "fetch_headers", return_value=("https://example.com/", {}, [], 200)), \
                 redirect_stdout(out):
             code = cli.main(["example.com", "--only", "hsts,csp", *argv])
         return code, out.getvalue()

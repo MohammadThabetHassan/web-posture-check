@@ -3,7 +3,7 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from webposture.cli import fetch_final_url
+from webposture.fetch import fetch_final_url
 
 
 def _closed_port():

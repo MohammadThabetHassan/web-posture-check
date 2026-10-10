@@ -195,6 +195,17 @@ ruff check src tests
 
 Without the `[dns]` extra, the few tests that drive dnspython are skipped. CI lints with Ruff (rules pinned in `pyproject.toml`), runs the suite on Python 3.9, 3.11 and 3.13, and a second workflow runs the GitHub Action from the checkout, including a case that must fail.
 
+Layout of `src/webposture/`:
+
+| Module | Role |
+|---|---|
+| `cli.py` | Argument parsing and the loop over targets |
+| `runner.py` | Scanning one target: fetch, run the selected checks, exit code |
+| `fetch.py` | HTTP requests, redirects, retries and error messages |
+| `output.py` | Text, JSON and Markdown output (`markdown.py` renders the report) |
+| `headers.py`, `cookies.py`, `cors.py`, `tls.py`, `transport.py`, `caa.py`, `securitytxt.py`, `emailauth.py` | The checks |
+| `score.py`, `findings.py` | Score and grade, and the `Finding` type |
+
 Checks are pure functions that take the response headers and return a finding, so new checks can be tested without network access. `tests/test_end_to_end.py` also runs the real CLI against small web servers on `127.0.0.1` (one well configured, one not), so the fetching, the CORS probe, the security.txt request and the output formats are tested together, still without internet access.
 
 ## Authors
