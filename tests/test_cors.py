@@ -40,6 +40,12 @@ class CheckCorsTest(unittest.TestCase):
         self.assertEqual(f.status, FAIL)
         self.assertIn("null", f.detail)
 
+    def test_null_origin_is_matched_exactly_like_browsers_do(self):
+        # Browsers compare the header to the serialized origin byte for byte, so
+        # "NULL" never matches a sandboxed iframe's Origin: null.
+        self.assertNotEqual(cors.check_cors("NULL", "true").status, FAIL)
+        self.assertEqual(cors.check_cors(" null ", "true").status, FAIL)
+
     def test_wildcard_with_credentials_warns(self):
         self.assertEqual(cors.check_cors("*", "true").status, WARN)
 

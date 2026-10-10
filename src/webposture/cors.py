@@ -22,8 +22,9 @@ def check_cors(allow_origin, allow_credentials, probe_origin=PROBE_ORIGIN):
         if credentials:
             return Finding("cors", FAIL, "reflects any Origin with credentials allowed: any website can read authenticated responses")
         return Finding("cors", WARN, "reflects any Origin (without credentials)")
-    if origin.lower() == "null" and credentials:
+    if origin == "null" and credentials:
         # Sandboxed iframes and local files send Origin: null, so this is open to anyone.
+        # Browsers match the value exactly (Fetch standard), so "NULL" does not count.
         return Finding("cors", FAIL, "allows Origin null with credentials: any website can read authenticated responses from a sandboxed iframe")
     if origin == "*" and credentials:
         return Finding("cors", WARN, "'*' with credentials allowed: browsers reject this combination, which suggests a misconfigured CORS policy")

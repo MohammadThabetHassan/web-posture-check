@@ -36,6 +36,7 @@ First release published to PyPI. Every change below was a pull request co-author
 
 ### Fixed
 
+- `cors` matched `Access-Control-Allow-Origin: null` case-insensitively; browsers compare it exactly, so only `null` counts (#35)
 - `https-redirect` probed port 80 for an `http://host:8080` target and could wrongly pass (#30)
 
 ### Changed
@@ -43,6 +44,7 @@ First release published to PyPI. Every change below was a pull request co-author
 - `cli.py` split into `cli`, `runner`, `fetch` and `output`; the `--insecure` global replaced by an explicit TLS context (#33)
 - README refreshed, and both authors credited (#31)
 - The package version is read from `webposture.__version__` (#1)
+- Packaging metadata, a tag-triggered release workflow with PyPI Trusted Publishing, `SECURITY.md`, `CONTRIBUTING.md` and Dependabot for the pinned Actions and Python tooling (#35)
 
 ## [0.1.0] - 2026-10-09
 
