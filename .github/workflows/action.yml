@@ -14,7 +14,7 @@ jobs:
   passing-run:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Checks that pass on github.com
         uses: ./
         with:
@@ -24,7 +24,7 @@ jobs:
   failing-run:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: A check that fails on example.com (no HSTS)
         id: scan
         uses: ./
