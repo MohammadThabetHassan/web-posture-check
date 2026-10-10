@@ -10,9 +10,13 @@ from .findings import Finding, PASS, WARN, FAIL
 
 
 def http_url_for(url):
-    """Return the http:// version of a URL on the default port, keeping host, path and query.
+    """Return the http:// version of a URL, keeping host, path and query.
 
-    An explicit port is dropped because it belongs to the HTTPS service.
+    For an https:// URL an explicit port is dropped, because it belongs to the
+    HTTPS service and plain HTTP is expected on the default port. For an
+    http:// URL the port is kept: that port is where plain HTTP is served, and
+    dropping it would probe port 80 instead and could wrongly report
+    "not reachable".
     """
     parts = urlsplit(url)
     host = parts.hostname or ""
@@ -20,6 +24,8 @@ def http_url_for(url):
         # An IPv6 literal must keep its brackets, or the rebuilt URL is
         # malformed and the plain-HTTP request silently fails.
         host = f"[{host}]"
+    if parts.scheme == "http" and parts.port:
+        host = f"{host}:{parts.port}"
     return urlunsplit(("http", host, parts.path or "/", parts.query, ""))
 
 

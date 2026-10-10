@@ -23,6 +23,14 @@ class HttpUrlTest(unittest.TestCase):
             "http://[2606:2800:220:1::1]/app",
         )
 
+    def test_http_target_keeps_its_port(self):
+        # Plain HTTP is served on that port; dropping it would probe port 80.
+        self.assertEqual(transport.http_url_for("http://example.com:8080/x?y=1"), "http://example.com:8080/x?y=1")
+        self.assertEqual(transport.http_url_for("http://[::1]:8080/"), "http://[::1]:8080/")
+
+    def test_http_target_on_the_default_port_is_unchanged(self):
+        self.assertEqual(transport.http_url_for("http://example.com/"), "http://example.com/")
+
 
 class HttpsRedirectTest(unittest.TestCase):
     def test_redirect_to_https_passes(self):
