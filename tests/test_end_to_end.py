@@ -69,6 +69,18 @@ class _BadSite(BaseHTTPRequestHandler):
         pass
 
 
+class _ErrorSite(BaseHTTPRequestHandler):
+    """Answers every path with 503, as a server behind bot protection does."""
+
+    def do_GET(self):
+        self.send_response(503)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+
 class EndToEndTest(unittest.TestCase):
     def _serve(self, handler):
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -118,6 +130,18 @@ class EndToEndTest(unittest.TestCase):
     def test_fail_on_warn_exit_codes(self):
         self.assertEqual(self._run(self._serve(_GoodSite), "--fail-on", "warn")[0], 0)
         self.assertEqual(self._run(self._serve(_BadSite), "--fail-on", "warn")[0], 1)
+
+    def test_error_page_is_flagged_and_other_checks_still_run(self):
+        # A 503 (e.g. bot protection): http-status must flag it with the
+        # bot-protection hint, and the header checks must still run on the error
+        # page rather than the fetch aborting the whole scan.
+        code, out = self._run(self._serve(_ErrorSite), "--json")
+        statuses = self._statuses(json.loads(out))
+        self.assertEqual(statuses["http-status"], "WARN")
+        self.assertEqual(statuses["hsts"], "FAIL")  # the checks ran on the 503 response
+        http_status = next(f for f in json.loads(out)["findings"] if f["check"] == "http-status")
+        self.assertIn("bot protection", http_status["detail"])
+        self.assertEqual(code, 1)
 
 
 if __name__ == "__main__":
