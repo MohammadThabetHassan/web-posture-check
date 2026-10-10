@@ -8,12 +8,12 @@ dynamic = ["version"]
 description = "Check a website's security posture from the command line"
 readme = "README.md"
 license = { text = "MIT" }
-authors = [{ name = "Mohammad Thabet" }]
+authors = [{ name = "Mohammad Thabet" }, { name = "Omar Alraas" }]
 requires-python = ">=3.9"
 dependencies = []
 
 [project.optional-dependencies]
-# DNS-based checks (SPF). The core tool stays dependency-free.
+# DNS-based checks (CAA, SPF, DMARC, DKIM). The core tool stays dependency-free.
 dns = ["dnspython>=2.0"]
 
 [project.scripts]

@@ -1,6 +1,6 @@
 # web-posture-check
 
-A small command-line tool that checks a website's security posture and tells you what to fix. The core has no third-party dependencies.
+A small command-line tool that checks a website's security posture and tells you what to fix. The core has no third-party dependencies. Built by Mohammad Thabet and Omar Alraas (see [Authors](#authors)).
 
 It checks HTTP security headers, cookie flags, CORS, the TLS certificate, deprecated TLS versions, the CAA record, `security.txt`, the domain's SPF, DMARC and DKIM records, and that plain HTTP redirects to HTTPS.
 
@@ -32,7 +32,7 @@ web-posture-check example.com --only tls-certificate,caa
 web-posture-check example.com --skip spf,dmarc,dkim
 ```
 
-A bare domain is fetched over `https://`. The final HTTP status is shown next to the target and included as `status` in the `--json` output. Redirects are followed and the headers of the final response are checked. The same host and path are then requested over `http://` (default port) to see whether it redirects to HTTPS.
+A bare domain is fetched over `https://`. The final HTTP status is shown next to the target and included as `status` in the `--json` output. Redirects are followed and the headers of the final response are checked. The same host and path are then requested over `http://` to see whether it redirects to HTTPS: on the default port for an `https://` target, or on the target's own port for an `http://` target such as `http://host:8080`.
 
 Example output:
 
@@ -51,7 +51,7 @@ Score: 55/100 (grade F)
   [PASS] information-leakage: no server version or stack headers
   [PASS] cookies: no cookies set
   [PASS] cors: no Access-Control-Allow-Origin for a foreign origin
-  [PASS] tls-certificate: certificate valid until 2026-12-25 (77 days)
+  [PASS] tls-certificate: certificate valid until 2026-12-25 (76 days)
   [FAIL] tls-protocols: server accepts TLS 1.0, TLS 1.1, which are deprecated (RFC 8996)
   [WARN] caa: no CAA record, so any certificate authority may issue certificates for this host
   [WARN] security-txt: no /.well-known/security.txt, so researchers have no published way to report vulnerabilities
@@ -67,11 +67,27 @@ Score: 55/100 (grade F)
 
 ### Multiple targets
 
-Give several targets, and/or `--targets-file FILE` with one target per line (blank lines and lines starting with `#` are ignored). Each target is scanned in turn and reported on its own. A target that cannot be reached is reported on stderr and the others still run. The exit code is the worst one across all targets: 2 if any target was unreachable, otherwise 1 if any FAIL, otherwise 0. With `--format json`, several targets give `{"results": [...]}` with one object per reachable target. A single target keeps the plain object shown below.
+Give several targets, and/or `--targets-file FILE` with one target per line (blank lines and lines starting with `#` are ignored). Each target is scanned in turn and reported on its own. A target that cannot be reached is reported on stderr and the others still run. The exit code is the worst one across all targets: 2 if any target was unreachable, otherwise 1 if any FAIL, otherwise 0. With `--format json`, several targets give `{"results": [...]}` with one object per reachable target. A single target gives the plain object shown under [Output formats](#output-formats).
 
 ### Output formats
 
-`--format text` (the default) prints one line per finding. `--format json` (or `--json`) prints machine-readable output with `url`, `status` and `findings`. `--format markdown` prints a report for tickets, pull requests or emails: a heading with the URL, the HTTP status, when and with which version it was generated, a FAIL/WARN/PASS count, and a table with failures listed first.
+`--format text` (the default) prints one line per finding. `--format json` (or `--json`) prints machine-readable output with `url`, `status`, `findings`, `score` and `grade`, plus a `note` when checks were skipped or ran with `--insecure`. `--format markdown` prints a report for tickets, pull requests or emails: a heading with the URL, the HTTP status, when and with which version it was generated, a FAIL/WARN/PASS count, and a table with failures listed first.
+
+`web-posture-check example.com --only http-status,hsts,tls-certificate --json` prints:
+
+```json
+{
+  "url": "https://example.com",
+  "status": 200,
+  "findings": [
+    {"check": "http-status", "status": "PASS", "detail": "final response is HTTP 200"},
+    {"check": "hsts", "status": "FAIL", "detail": "Strict-Transport-Security header is missing"},
+    {"check": "tls-certificate", "status": "PASS", "detail": "certificate valid until 2026-12-25 (76 days)"}
+  ],
+  "score": 67,
+  "grade": "D"
+}
+```
 
 ### Score and grade
 
@@ -172,12 +188,23 @@ For reproducible runs, pin the action to a commit SHA instead of `@main`.
 ## Development
 
 ```bash
-pip install -e .
+pip install -e ".[dns]"
 python -m unittest discover -s tests -v
 ```
 
+Without the `[dns]` extra, the few tests that drive dnspython are skipped. CI runs the suite on Python 3.9, 3.11 and 3.13, and a second workflow runs the GitHub Action from the checkout, including a case that must fail.
+
 Checks are pure functions that take the response headers and return a finding, so new checks can be tested without network access. `tests/test_end_to_end.py` also runs the real CLI against small web servers on `127.0.0.1` (one well configured, one not), so the fetching, the CORS probe, the security.txt request and the output formats are tested together, still without internet access.
+
+## Authors
+
+web-posture-check is built by:
+
+- **Mohammad Thabet** ([@MohammadThabetHassan](https://github.com/MohammadThabetHassan))
+- **Omar Alraas** ([@omaralraas](https://github.com/omaralraas))
+
+Most changes are made as pull requests that both authors work on, so each one is co-authored by both.
 
 ## License
 
-MIT
+MIT, see [LICENSE](LICENSE).
