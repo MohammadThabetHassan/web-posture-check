@@ -433,6 +433,33 @@ class InsecureTest(unittest.TestCase):
             cli.main(["good.example", "--only", "hsts", "--insecure"])
         self.assertEqual(contexts, [None])
 
+    def test_insecure_context_reaches_security_txt_and_redirect_requests(self):
+        # The existing tests only cover fetch_headers (main fetch and CORS probe).
+        # The security.txt (fetch_text) and https-redirect (fetch_final_url)
+        # requests must get the same unverified context, or they would re-verify
+        # on a broken-certificate site and report misleading results.
+        seen = {}
+
+        def fake_headers(url, timeout, extra_headers=None, context=None):
+            if context is None:
+                raise _cert_error(10, "certificate has expired")
+            return (url, {}, [], 200)
+
+        def fake_text(url, timeout, limit, context=None):
+            seen["security-txt"] = context
+            return (404, None, "")
+
+        def fake_final(url, timeout, context=None):
+            seen["https-redirect"] = context
+            return None
+
+        with mock.patch.object(fetch, "fetch_headers", side_effect=fake_headers), \
+                mock.patch.object(fetch, "fetch_text", side_effect=fake_text), \
+                mock.patch.object(fetch, "fetch_final_url", side_effect=fake_final), redirect_stdout(io.StringIO()):
+            cli.main(["bad-cert.example", "--only", "security-txt,https-redirect", "--insecure"])
+        self.assertEqual(seen["security-txt"].verify_mode, ssl.CERT_NONE)
+        self.assertEqual(seen["https-redirect"].verify_mode, ssl.CERT_NONE)
+
 
 if __name__ == "__main__":
     unittest.main()
