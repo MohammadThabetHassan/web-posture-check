@@ -176,7 +176,7 @@ pip install -e .
 python -m unittest discover -s tests -v
 ```
 
-Checks are pure functions that take the response headers and return a finding, so new checks can be tested without network access.
+Checks are pure functions that take the response headers and return a finding, so new checks can be tested without network access. `tests/test_end_to_end.py` also runs the real CLI against small web servers on `127.0.0.1` (one well configured, one not), so the fetching, the CORS probe, the security.txt request and the output formats are tested together, still without internet access.
 
 ## License
 
