@@ -572,5 +572,40 @@ class ParallelTest(unittest.TestCase):
             self.assertEqual(ctx.exception.code, 2, value)
 
 
+class ListChecksAndOutputTest(unittest.TestCase):
+    """--list-checks and --output. No network needed."""
+
+    def test_list_checks_prints_every_check_once_in_report_order(self):
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = cli.main(["--list-checks"])
+        names = [line.split()[0] for line in out.getvalue().splitlines()]
+        self.assertEqual(names, runner.ALL_CHECKS)
+        self.assertEqual(code, 0)
+
+    def test_every_check_has_a_summary(self):
+        self.assertEqual(list(cli.CHECK_SUMMARIES), runner.ALL_CHECKS)
+
+    def test_output_writes_utf8_file_and_prints_nothing(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "report.md")
+            out = io.StringIO()
+            with mock.patch.object(fetch, "fetch_headers", return_value=("https://example.com/", {}, [], 200)),                     redirect_stdout(out):
+                code = cli.main(["example.com", "--only", "hsts", "--format", "markdown", "--output", path])
+            with open(path, encoding="utf-8") as handle:
+                report = handle.read()
+        self.assertEqual(out.getvalue(), "")
+        self.assertIn("## Web posture report: https://example.com/", report)
+        self.assertIn("**Grade F** (0/100)", report)
+        self.assertEqual(code, 1)
+
+    def test_unwritable_output_exits_2(self):
+        err = io.StringIO()
+        with tempfile.TemporaryDirectory() as folder,                 mock.patch.object(fetch, "fetch_headers", return_value=("https://example.com/", {}, [], 200)),                 redirect_stdout(io.StringIO()), mock.patch("sys.stderr", err):
+            code = cli.main(["example.com", "--only", "hsts", "--output", os.path.join(folder, "missing", "report.md")])
+        self.assertEqual(code, 2)
+        self.assertIn("could not write --output", err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -24,6 +24,31 @@ def parse_check_names(value):
     return names
 
 
+# One line per check for --list-checks, in report order.
+CHECK_SUMMARIES = {
+    "http-status": "the final response is not an error page (bot protection, 4xx, 5xx)",
+    "hsts": "Strict-Transport-Security max-age, includeSubDomains and preload",
+    "csp": "Content-Security-Policy is set and its script policy is not unsafe",
+    "x-content-type-options": "X-Content-Type-Options: nosniff",
+    "clickjacking": "CSP frame-ancestors or X-Frame-Options",
+    "referrer-policy": "Referrer-Policy is set and not unsafe-url",
+    "permissions-policy": "Permissions-Policy is set",
+    "cross-origin-isolation": "Cross-Origin-Opener, -Resource and -Embedder policies",
+    "x-xss-protection": "the legacy XSS auditor is not turned on",
+    "information-leakage": "no server version or stack headers",
+    "cookies": "Secure, HttpOnly, SameSite and __Host- / __Secure- prefixes",
+    "cors": "no credentialed access for any origin (probe request)",
+    "tls-certificate": "trusted and not close to expiry",
+    "tls-protocols": "TLS 1.0 and 1.1 are refused",
+    "caa": "a CAA record limits which CAs may issue",
+    "security-txt": "/.well-known/security.txt (RFC 9116)",
+    "spf": "a single SPF record that does not allow everyone",
+    "dmarc": "a DMARC policy that quarantines or rejects",
+    "dkim": "a DKIM key under common or given selectors",
+    "https-redirect": "plain HTTP redirects to HTTPS",
+}
+
+
 def read_targets_file(path):
     """One target per line; blank lines and lines starting with # are ignored."""
     with open(path, encoding="utf-8") as handle:
@@ -46,6 +71,9 @@ def build_parser():
                               help="output format (default text); markdown is a table for tickets and pull requests")
     output_group.add_argument("--json", action="store_const", const="json", dest="format",
                               help="same as --format json")
+    parser.add_argument("--output", metavar="FILE",
+                        help="write the report to FILE (UTF-8) instead of printing it")
+    parser.add_argument("--list-checks", action="store_true", help="print every check name with a short description and exit")
     parser.add_argument("--timeout", type=float, default=10.0, help="request timeout in seconds (default 10)")
     parser.add_argument("--insecure", action="store_true",
                         help="if a target's certificate is not trusted, still run the other checks without verification "
@@ -71,6 +99,11 @@ def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
 
+    if args.list_checks:
+        width = max(len(name) for name in runner.ALL_CHECKS)
+        print("\n".join(f"{name.ljust(width)}  {CHECK_SUMMARIES[name]}" for name in runner.ALL_CHECKS))
+        return 0
+
     targets = list(args.targets)
     if args.targets_file:
         try:
@@ -90,7 +123,17 @@ def main(argv=None):
             print(f"error: {error}", file=sys.stderr)
         if result is not None:
             results.append(result)
-    output.report(args.format, results, single=len(targets) == 1)
+    text = output.render(args.format, results, single=len(targets) == 1)
+    if args.output:
+        try:
+            # Written as UTF-8 whatever the console encoding is (Windows consoles are often not UTF-8).
+            with open(args.output, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(text)
+        except OSError as err:
+            print(f"error: could not write --output: {err}", file=sys.stderr)
+            return 2
+    else:
+        sys.stdout.write(text)
     # The worst outcome wins: 2 (a target could not be reached) over 1 (a FAIL) over 0.
     return max(codes)
 

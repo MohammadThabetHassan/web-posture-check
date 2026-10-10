@@ -1,6 +1,6 @@
 name: web-posture-check
-description: Check websites' security posture (headers, cookies, CORS, TLS, CAA, security.txt, SPF, DMARC, DKIM) and fail the job on problems.
-author: Mohammad Thabet
+description: Grade a website's security posture (headers, cookies, CORS, TLS, CAA, security.txt, SPF, DMARC, DKIM).
+author: Mohammad Thabet and Omar Alraas
 branding:
   icon: shield
   color: green
@@ -24,6 +24,20 @@ inputs:
     required: false
     default: "3.12"
 
+outputs:
+  score:
+    description: Lowest score (0-100) across the targets, empty if nothing could be scored.
+    value: ${{ steps.scan.outputs.score }}
+  grade:
+    description: Worst letter grade (A to F) across the targets, empty if nothing could be scored.
+    value: ${{ steps.scan.outputs.grade }}
+  exit-code:
+    description: The tool's exit code (0 no FAIL, 1 a FAIL or with --fail-on warn a WARN, 2 a target could not be reached).
+    value: ${{ steps.scan.outputs.exit-code }}
+  report:
+    description: Path of the Markdown report file.
+    value: ${{ steps.scan.outputs.report }}
+
 runs:
   using: composite
   steps:
@@ -46,6 +60,7 @@ runs:
         fi
 
     - name: Run web-posture-check
+      id: scan
       shell: bash
       env:
         TARGETS: ${{ inputs.targets }}
@@ -55,9 +70,20 @@ runs:
         # off so a value such as "*" is passed through literally.
         set -f
         set +e
-        web-posture-check $TARGETS $EXTRA_ARGS --format markdown > "$RUNNER_TEMP/web-posture-report.md"
+        report="$RUNNER_TEMP/web-posture-report.md"
+        web-posture-check $TARGETS $EXTRA_ARGS --format markdown --output "$report"
         code=$?
         set -e
-        cat "$RUNNER_TEMP/web-posture-report.md"
-        cat "$RUNNER_TEMP/web-posture-report.md" >> "$GITHUB_STEP_SUMMARY"
+        touch "$report"
+        cat "$report"
+        cat "$report" >> "$GITHUB_STEP_SUMMARY"
+        # Lowest score and worst grade across every "**Grade X** (N/100)" line of the report.
+        python - "$report" >> "$GITHUB_OUTPUT" <<'PY'
+        import re, sys
+        found = re.findall(r"\*\*Grade ([A-F])\*\* \((\d+)/100\)", open(sys.argv[1], encoding="utf-8").read())
+        print("score=" + (str(min(int(s) for _, s in found)) if found else ""))
+        print("grade=" + (max(g for g, _ in found) if found else ""))
+        PY
+        echo "exit-code=$code" >> "$GITHUB_OUTPUT"
+        echo "report=$report" >> "$GITHUB_OUTPUT"
         exit $code

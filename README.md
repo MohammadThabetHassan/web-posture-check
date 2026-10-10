@@ -1,49 +1,22 @@
+<div align="center">
+
 # web-posture-check
+
+**Grade a website's security posture from the outside, in one command.**
+
+Security headers · cookies · CORS · TLS · CAA · security.txt · SPF · DMARC · DKIM · HTTPS redirect
 
 [![CI](https://github.com/MohammadThabetHassan/web-posture-check/actions/workflows/ci.yml/badge.svg)](https://github.com/MohammadThabetHassan/web-posture-check/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/web-posture-check)](https://pypi.org/project/web-posture-check/)
 [![Python](https://img.shields.io/pypi/pyversions/web-posture-check)](https://pypi.org/project/web-posture-check/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-A small command-line tool that checks a website's security posture and tells you what to fix. The core has no third-party dependencies. Built by Mohammad Thabet and Omar Alraas (see [Authors](#authors)).
-
-It checks HTTP security headers, cookie flags, CORS, the TLS certificate, deprecated TLS versions, the CAA record, `security.txt`, the domain's SPF, DMARC and DKIM records, and that plain HTTP redirects to HTTPS.
-
-## Install
-
-```bash
-pip install web-posture-check
-```
-
-Requires Python 3.9 or newer. To install from source instead:
-
-```bash
-git clone https://github.com/MohammadThabetHassan/web-posture-check.git
-cd web-posture-check
-pip install .
-```
-
-The CAA, SPF, DMARC and DKIM checks read DNS records, which the standard library cannot do. Install the optional DNS support to enable them; without it they are reported as skipped:
+</div>
 
 ```bash
 pip install "web-posture-check[dns]"
-```
-
-## Usage
-
-```bash
 web-posture-check example.com
-web-posture-check https://example.com/login --json
-web-posture-check example.com --format markdown > report.md
-web-posture-check site-one.com site-two.com --targets-file clients.txt
-web-posture-check example.com --dkim-selector s1 --dkim-selector s2
-web-posture-check example.com --only tls-certificate,caa
-web-posture-check example.com --skip spf,dmarc,dkim
 ```
-
-A bare domain is fetched over `https://`. The final HTTP status is shown next to the target and included as `status` in the `--json` output. Redirects are followed and the headers of the final response are checked. The same host and path are then requested over `http://` to see whether it redirects to HTTPS: on the default port for an `https://` target, or on the target's own port for an `http://` target such as `http://host:8080`.
-
-Example output:
 
 ```
 Target: https://example.com (HTTP 200)
@@ -51,148 +24,227 @@ Score: 55/100 (grade F)
   [PASS] http-status: final response is HTTP 200
   [FAIL] hsts: Strict-Transport-Security header is missing
   [FAIL] csp: Content-Security-Policy header is missing
-  [FAIL] x-content-type-options: X-Content-Type-Options header is missing
-  [FAIL] clickjacking: neither CSP frame-ancestors nor X-Frame-Options DENY/SAMEORIGIN is set
-  [WARN] referrer-policy: Referrer-Policy header is missing (browser default applies)
-  [WARN] permissions-policy: Permissions-Policy header is missing
-  [WARN] cross-origin-isolation: Cross-Origin-Opener-Policy is missing or unsafe-none, so a page that opens this one keeps a handle to its window; Cross-Origin-Resource-Policy is missing, so other sites can embed this response (COOP=unset, CORP=unset, COEP=unset)
-  [PASS] x-xss-protection: not set (rely on Content-Security-Policy)
-  [PASS] information-leakage: no server version or stack headers
-  [PASS] cookies: no cookies set
-  [PASS] cors: no Access-Control-Allow-Origin for a foreign origin
-  [PASS] tls-certificate: certificate valid until 2026-12-25 (76 days)
+  ...
   [FAIL] tls-protocols: server accepts TLS 1.0, TLS 1.1, which are deprecated (RFC 8996)
   [WARN] caa: no CAA record, so any certificate authority may issue certificates for this host
-  [WARN] security-txt: no /.well-known/security.txt, so researchers have no published way to report vulnerabilities
-  [PASS] spf: example.com: v=spf1 -all
-  [PASS] dmarc: _dmarc.example.com: v=DMARC1;p=reject;sp=reject;adkim=s;aspf=s
-  [WARN] dkim: only revoked keys (empty p=) under common selectors (google, selector1, selector2, k1, s1, s2, default, dkim, mail, cf2024-1); fine if example.com sends no mail, otherwise its active key uses another selector, which --dkim-selector can check
+  ...
   [FAIL] https-redirect: http://example.com/ is served over plain HTTP without redirecting to HTTPS
 ```
 
-### Timeouts and retries
+## Why web-posture-check
 
-`--timeout` (default 10 seconds) applies to each request. If a target's first request times out or the connection is dropped, it is retried after a one-second pause, once by default; `--retries N` sets this from 0 to 5. DNS failures and certificate errors are not retried, since a second try would give the same answer. When a target still cannot be reached, the error says why in plain words, for example `https://example.com did not respond within 10s (2 attempts); the site may be down or slow, try a larger --timeout`.
+- **20 checks in one run**, covering the response, the TLS server and the domain's DNS: what a browser, a mail server and an attacker each see from outside. [All checks](#checks).
+- **No false passes.** When a check cannot decide (a DNS lookup failed, the local OpenSSL cannot offer TLS 1.0, a DKIM selector cannot be guessed), it says so as a WARN instead of passing.
+- **Grounded in the standards.** Rules follow the RFCs, the Fetch standard and OWASP guidance, and each finding explains why it matters.
+- **Built for CI.** Exit codes, `--fail-on warn`, JSON and Markdown reports, a score and grade, and a ready-made [GitHub Action](#github-action).
+- **Light.** The core has no third-party dependencies; DNS checks use the optional `[dns]` extra. Python 3.9 or newer.
 
-### Multiple targets
+## Contents
 
-Give several targets, and/or `--targets-file FILE` with one target per line (blank lines and lines starting with `#` are ignored). Up to 4 targets are scanned at the same time (`--jobs N` sets 1 to 16), and each is reported on its own in the order given, however the scans finish. A target that cannot be reached is reported on stderr, also in input order, and the others still run. An `--insecure` scan of one target never affects the requests of another. The exit code is the worst one across all targets: 2 if any target was unreachable, otherwise 1 if any FAIL, otherwise 0. With `--format json`, several targets give `{"results": [...]}` with one object per reachable target. A single target gives the plain object shown under [Output formats](#output-formats).
+- [Install](#install)
+- [Usage](#usage)
+- [Checks](#checks)
+- [Reports, score and exit codes](#reports-score-and-exit-codes)
+- [GitHub Action](#github-action)
+- [How it works](#how-it-works)
+- [Development](#development)
+- [Releases](#releases) · [Contributing and security](#contributing-and-security) · [Authors](#authors) · [License](#license)
 
-### Output formats
+## Install
 
-`--format text` (the default) prints one line per finding. `--format json` (or `--json`) prints machine-readable output with `url`, `status`, `findings`, `score` and `grade`, plus a `note` when checks were skipped or ran with `--insecure`. `--format markdown` prints a report for tickets, pull requests or emails: a heading with the URL, the HTTP status, when and with which version it was generated, a FAIL/WARN/PASS count, and a table with failures listed first.
-
-`web-posture-check example.com --only http-status,hsts,tls-certificate --json` prints:
-
-```json
-{
-  "url": "https://example.com",
-  "status": 200,
-  "findings": [
-    {"check": "http-status", "status": "PASS", "detail": "final response is HTTP 200"},
-    {"check": "hsts", "status": "FAIL", "detail": "Strict-Transport-Security header is missing"},
-    {"check": "tls-certificate", "status": "PASS", "detail": "certificate valid until 2026-12-25 (76 days)"}
-  ],
-  "score": 67,
-  "grade": "D"
-}
+```bash
+pip install web-posture-check            # headers, cookies, CORS, TLS, security.txt, HTTPS redirect
+pip install "web-posture-check[dns]"     # also CAA, SPF, DMARC and DKIM (adds dnspython)
 ```
 
-### Score and grade
+Without the `[dns]` extra the DNS checks are reported as skipped, not failed. To install from source, clone the repository and run `pip install ".[dns]"`.
 
-Every report includes an overall score and letter grade, e.g. `Score: 92/100 (grade A)`:
+## Usage
 
-- Each check counts 1 for PASS, 0.5 for WARN and 0 for FAIL, and the score is the average scaled to 100. It works the same for any `--only`/`--skip` selection.
-- Grade A is 90 and above, B 80 to 89, C 70 to 79, D 60 to 69, and F below 60.
-- A needs zero FAILs. A run with any FAIL is capped at B, so one serious problem cannot hide behind many passes.
-- Checks reported as skipped (for example the DNS checks without the optional extra) are shown but not scored.
+```bash
+web-posture-check example.com                                 # every check, text report
+web-posture-check https://example.com/login --json            # a specific page, JSON
+web-posture-check example.com --format markdown --output report.md
+web-posture-check site-one.com site-two.com --targets-file clients.txt --jobs 8
+web-posture-check example.com --only tls-certificate,tls-protocols,caa
+web-posture-check example.com --skip spf,dmarc,dkim --fail-on warn
+web-posture-check --list-checks
+```
 
-JSON output has top-level `score` and `grade` fields, and the Markdown summary starts with the grade.
-
-### Choosing checks
-
-`--only` runs just the named checks and `--skip` runs everything except them. Both take comma-separated check names, the names shown in the output and in the table below. A left-out check makes no requests at all, so `--skip spf,dmarc,dkim,caa` also avoids the DNS lookups. An unknown name is a usage error that lists the valid names. The two options cannot be combined.
-
-### Exit codes
-
-| Code | Meaning |
-|------|---------|
-| 0 | No FAIL findings (WARN findings may exist) |
-| 1 | At least one FAIL finding (including a broken certificate on the target), or with `--fail-on warn` at least one WARN |
-| 2 | A target could not be reached (DNS failure, connection refused, timeout) |
-
-This makes it easy to use as a gate in CI. For a strict gate, `--fail-on warn` also exits 1 on any WARN; checks reported as skipped (such as DNS checks without the optional extra) do not count, since they say nothing about the site.
-
-If the target's certificate is expired or not trusted, that is reported as a `tls-certificate` FAIL and the run exits with 1. The other checks are skipped, because there is no trusted connection to read the response from. With `--insecure`, the other checks run anyway without certificate verification, for that target only: the certificate FAIL stays first in the report (even with `--only`), a note says the checks ran without verification, and the run still exits with at least 1. Trusted sites are never fetched without verification.
+| Option | What it does |
+|---|---|
+| `target ...` | Domains or URLs. A bare domain is fetched over `https://`. |
+| `--targets-file FILE` | More targets, one per line; blank lines and `#` comments are ignored. |
+| `--format text\|json\|markdown`, `--json` | Output format (default `text`). |
+| `--output FILE` | Write the report to `FILE` as UTF-8 instead of printing it. |
+| `--only NAMES`, `--skip NAMES` | Comma-separated check names to run or leave out. A left-out check makes no requests. |
+| `--list-checks` | Print every check name with a short description. |
+| `--fail-on fail\|warn` | Exit 1 on any FAIL (default), or on any WARN or FAIL. |
+| `--jobs N` | Scan up to `N` targets at the same time (default 4, max 16). Output keeps the input order. |
+| `--timeout SECONDS` | Per-request timeout (default 10). |
+| `--retries N` | Retry a target's first request after a timeout or dropped connection (default 1, max 5). DNS and certificate errors are not retried. |
+| `--insecure` | If a target's certificate is not trusted, still run the other checks for that target without verification. The certificate stays a FAIL. |
+| `--dkim-selector NAME` | DKIM selector to check, repeatable. By default common provider selectors are tried. |
+| `--version` | Print the version. |
 
 ## Checks
 
+`web-posture-check --list-checks` prints this list. Each check reports PASS, WARN or FAIL with a one-line reason.
+
+| Area | Checks |
+|---|---|
+| **Response** | `http-status` · `hsts` · `csp` · `x-content-type-options` · `clickjacking` · `referrer-policy` · `permissions-policy` · `cross-origin-isolation` · `x-xss-protection` · `information-leakage` |
+| **Cookies and CORS** | `cookies` · `cors` |
+| **TLS** | `tls-certificate` · `tls-protocols` |
+| **DNS and email** | `caa` · `spf` · `dmarc` · `dkim` |
+| **Policy and transport** | `security-txt` · `https-redirect` |
+
+<details>
+<summary><b>Response headers</b>: exactly when each check fails or warns</summary>
+
 | Check | FAIL when | WARN when |
-|-------|-----------|-----------|
-| `http-status` | | the final response is an error (HTTP 400 or higher), so the other findings describe an error page. 403, 429 and 503 are often bot protection blocking automated clients |
-| `hsts` | `Strict-Transport-Security` missing or has no `max-age` | `max-age` is below 6 months, or `preload` is set without the preload list's requirements (`max-age` of at least 1 year and `includeSubDomains`) |
-| `csp` | `Content-Security-Policy` missing | only `Content-Security-Policy-Report-Only` is set; or the script policy (`script-src`, else `default-src`) allows `'unsafe-inline'` without a nonce or hash, or allows `'unsafe-eval'`, or allows scripts from any host (`*`, `https:`, `http:`) or from `data:` URLs (ignored when `'strict-dynamic'` is set) |
+|---|---|---|
+| `http-status` | | the final response is HTTP 400 or higher, so the other findings describe an error page. 403, 429 and 503 are often bot protection blocking automated clients |
+| `hsts` | `Strict-Transport-Security` is missing or has no `max-age` | `max-age` is below 6 months, or `preload` is set without the preload list's requirements (`max-age` of at least 1 year and `includeSubDomains`) |
+| `csp` | `Content-Security-Policy` is missing | only the report-only header is set; or the script policy (`script-src`, else `default-src`) allows `'unsafe-inline'` without a nonce or hash, `'unsafe-eval'`, or scripts from any host (`*`, `https:`, `http:`) or `data:` (ignored with `'strict-dynamic'`) |
 | `x-content-type-options` | missing or not `nosniff` | |
 | `clickjacking` | no CSP `frame-ancestors` and no `X-Frame-Options: DENY/SAMEORIGIN` | |
 | `referrer-policy` | set to `unsafe-url` | missing |
 | `permissions-policy` | | missing |
-| `cross-origin-isolation` | | `Cross-Origin-Opener-Policy` is missing or `unsafe-none`, `Cross-Origin-Resource-Policy` is missing, or any of the three headers has a value browsers do not recognise (so it is ignored). A missing `Cross-Origin-Embedder-Policy` is reported but not warned about, since it is only needed for cross-origin isolation |
-| `x-xss-protection` | | set to `1` (with or without `mode=block`), which turns on the legacy XSS auditor that can be abused for XS-Leaks, or set to an invalid value. `0` or no header passes |
+| `cross-origin-isolation` | | `Cross-Origin-Opener-Policy` is missing or `unsafe-none`, `Cross-Origin-Resource-Policy` is missing, or any of the three headers has a value browsers do not recognise. A missing `Cross-Origin-Embedder-Policy` is reported but not warned about |
+| `x-xss-protection` | | set to `1` (with or without `mode=block`), which turns on the legacy XSS auditor that can be abused for XS-Leaks, or set to an invalid value |
 | `information-leakage` | | `Server` includes a version number, or `X-Powered-By`, `X-AspNet-Version` or `X-AspNetMvc-Version` is present |
-| `cookies` | a cookie on an HTTPS response lacks `Secure`, any cookie sets `SameSite=None` without `Secure`, a `__Secure-` cookie lacks `Secure`, or a `__Host-` cookie lacks `Secure` or `Path=/` or sets `Domain` (browsers reject all of these) | a cookie lacks `HttpOnly` or `SameSite` |
-| `cors` | the response reflects any `Origin`, or allows `Origin: null`, together with `Access-Control-Allow-Credentials: true` | the response reflects any `Origin` without credentials, or sends `*` with credentials (browsers reject that combination) |
-| `tls-certificate` | the certificate has expired, or is not trusted (wrong host, self-signed, untrusted chain, not yet valid) | it expires within 14 days (renewal tooling normally renews 30 days ahead, so this usually means renewal is failing) |
+
+</details>
+
+<details>
+<summary><b>Cookies and CORS</b></summary>
+
+| Check | FAIL when | WARN when |
+|---|---|---|
+| `cookies` | a cookie on an HTTPS response lacks `Secure`; `SameSite=None` without `Secure`; a `__Secure-` cookie lacks `Secure`; a `__Host-` cookie lacks `Secure` or `Path=/` or sets `Domain` (browsers reject all of these) | a cookie lacks `HttpOnly` or `SameSite` |
+| `cors` | the response reflects any `Origin`, or allows `Origin: null`, together with `Access-Control-Allow-Credentials: true` | it reflects any `Origin` without credentials, or sends `*` with credentials (browsers reject that combination) |
+
+Every `Set-Cookie` header is checked, and a `Set-Cookie` that only deletes a cookie (`Max-Age=0` or a past `Expires`) is ignored. A missing `HttpOnly` is a warning because some cookies are meant to be read by JavaScript.
+
+</details>
+
+<details>
+<summary><b>TLS</b></summary>
+
+| Check | FAIL when | WARN when |
+|---|---|---|
+| `tls-certificate` | the certificate has expired or is not trusted (wrong host, self-signed, untrusted chain, not yet valid) | it expires within 14 days; renewal tooling normally renews 30 days ahead, so this usually means renewal is failing |
 | `tls-protocols` | the server completes a TLS 1.0 or TLS 1.1 handshake (deprecated by RFC 8996) | this machine's OpenSSL cannot offer one of those versions, so support is unknown |
-| `caa` | | the host has no CAA record (any certificate authority may issue for it), the record has no `issue` property, or it has an unknown critical tag (every CA must then refuse) |
-| `security-txt` | | `/.well-known/security.txt` is missing, not served as `text/plain`, lacks the required `Contact` or `Expires` field, has an invalid, expired or duplicate `Expires`, or `Expires` is more than a year away (RFC 9116 recommends less) |
-| `spf` | the domain has more than one SPF record (receivers then ignore SPF), or the record ends in `+all`/`all`, which authorises every server | there is no SPF record, it ends in `?all`, it has no `all` mechanism and no `redirect=`, or the DNS lookup could not be done |
-| `dmarc` | the domain has more than one DMARC record (receivers then apply no policy) | there is no DMARC record, `p=none` (monitoring only), `p=` is missing or invalid, or `pct=` is below 100 |
-| `dkim` | | no key is found under the common selectors (or only revoked keys with an empty `p=`), or a selector given with `--dkim-selector` has no key or a revoked one. Selectors cannot be listed from outside, so not finding one under a guessed name is reported as unknown, never as a failure |
+
+</details>
+
+<details>
+<summary><b>DNS and email</b> (needs the <code>[dns]</code> extra)</summary>
+
+| Check | FAIL when | WARN when |
+|---|---|---|
+| `caa` | | no CAA record (any certificate authority may issue), no `issue` property, or an unknown critical tag (every CA must then refuse) |
+| `spf` | more than one SPF record (receivers then ignore SPF), or a record ending in `+all` / `all` | no SPF record, `?all`, or no `all` mechanism and no `redirect=` |
+| `dmarc` | more than one DMARC record (receivers then apply no policy) | no DMARC record, `p=none`, a missing or invalid `p=`, or `pct=` below 100 |
+| `dkim` | | no key under the common selectors, only revoked keys, or a selector given with `--dkim-selector` is missing or revoked. Selectors cannot be listed from outside, so this is reported as unknown, never as a failure |
+
+</details>
+
+<details>
+<summary><b>Policy and transport</b></summary>
+
+| Check | FAIL when | WARN when |
+|---|---|---|
+| `security-txt` | | `/.well-known/security.txt` is missing, not `text/plain`, lacks `Contact` or `Expires`, or has an invalid, expired, duplicate or more-than-a-year-away `Expires` (RFC 9116) |
 | `https-redirect` | the `http://` URL answers without ending up on `https://` after redirects | |
 
-If nothing answers on plain HTTP at all, `https-redirect` passes, since no content is served without TLS.
+If nothing answers on plain HTTP at all, `https-redirect` passes, since nothing is served without TLS.
 
-`cookies` checks every `Set-Cookie` header on the final response and lists each cookie with a problem. Some cookies are meant to be read by JavaScript, so a missing `HttpOnly` is a warning to review, not a failure. A `Set-Cookie` that only deletes a cookie (`Max-Age=0` or an `Expires` date in the past) is ignored, since the browser discards it.
+</details>
 
-To test TLS versions, a separate handshake is attempted that allows only TLS 1.0, then only TLS 1.1. OpenSSL 3 will not offer those versions at its default security level, so the probe lowers it for that connection only. If the local OpenSSL still cannot offer a version, the result is a warning, never a false pass.
+## Reports, score and exit codes
 
-CAA is read for the host that served the final URL, climbing to its parent domains until a record is found, as certificate authorities do (RFC 8659). SPF, DMARC and DKIM are read for the site's domain with a leading `www.` removed, so `www.example.com` is checked as `example.com`. DKIM is looked up at `<selector>._domainkey.<domain>` for common provider selectors (Google Workspace, Microsoft 365, Mailchimp, SendGrid, Cloudflare Email Routing and frequent defaults), or only for the selectors given with `--dkim-selector`. If a subdomain has no `_dmarc` record, the check falls back to its parent domains (down to two labels), as receivers do for the organizational domain.
+**Formats.** `text` (default) prints one line per finding. `json` gives `url`, `status`, `findings`, `score` and `grade` (plus `note` when checks were skipped or ran with `--insecure`); several targets give `{"results": [...]}`. `markdown` is a report for tickets, pull requests and emails, with failures first:
 
-To test CORS, the page is requested a second time with `Origin: https://web-posture-check.invalid`. The `.invalid` domain is reserved (RFC 2606) and cannot exist, so a site that allows it will allow any website.
+```markdown
+## Web posture report: https://example.com
+
+HTTP 200, generated 2026-10-10 15:50 UTC by web-posture-check 0.3.0
+
+**Grade F** (40/100): **3 FAIL**, **0 WARN**, 2 PASS
+
+| Status | Check | Detail |
+|---|---|---|
+| FAIL | `hsts` | Strict-Transport-Security header is missing |
+| FAIL | `csp` | Content-Security-Policy header is missing |
+| FAIL | `https-redirect` | http://example.com/ is served over plain HTTP without redirecting to HTTPS |
+| PASS | `http-status` | final response is HTTP 200 |
+| PASS | `tls-certificate` | certificate valid until 2026-12-25 (76 days) |
+```
+
+**Score and grade.** Each check counts 1 for PASS, 0.5 for WARN and 0 for FAIL, averaged to 100, so it means the same for any `--only` / `--skip` selection. A is 90 and above, B 80, C 70, D 60, F below. **A needs zero FAILs**: one serious problem cannot hide behind many passes. Skipped checks are shown but not scored.
+
+**Exit codes.** With several targets, the worst one wins.
+
+| Code | Meaning |
+|---|---|
+| 0 | No FAIL (WARN findings may exist) |
+| 1 | At least one FAIL, including an untrusted certificate; with `--fail-on warn`, also any WARN |
+| 2 | A target could not be reached (DNS failure, refused, timeout), or `--output` could not be written |
 
 ## GitHub Action
 
-Run the checks from any repository's workflow. The job fails when a check fails, and the Markdown report is added to the job summary:
+Check sites on a schedule. The job fails on problems and the Markdown report appears in the job summary.
 
 ```yaml
 name: Website posture
 on:
   schedule:
-    - cron: "0 6 * * 1"   # every Monday 06:00 UTC
+    - cron: "0 6 * * 1"   # Mondays 06:00 UTC
   workflow_dispatch:
 
 jobs:
   posture:
     runs-on: ubuntu-latest
     steps:
-      - uses: MohammadThabetHassan/web-posture-check@main
+      - id: posture
+        uses: MohammadThabetHassan/web-posture-check@v0.3.0
         with:
           targets: |
             example.com
             shop.example.com
           args: --fail-on warn
+      - if: always()
+        env:
+          GRADE: ${{ steps.posture.outputs.grade }}
+          SCORE: ${{ steps.posture.outputs.score }}
+        run: echo "Grade $GRADE ($SCORE/100)"
 ```
-
-Inputs:
 
 | Input | Default | Meaning |
 |---|---|---|
 | `targets` | (required) | Domains or URLs, separated by spaces or new lines |
-| `args` | `""` | Extra options such as `--only tls-certificate,caa` or `--fail-on warn`. Do not pass `--format` or `--json`; the action always writes a Markdown report |
-| `dns` | `"true"` | Install the optional DNS support for the CAA, SPF, DMARC and DKIM checks |
+| `args` | `""` | Extra options such as `--only tls-certificate,caa` or `--fail-on warn`. Do not pass `--format`, `--json` or `--output`; the action writes the Markdown report itself |
+| `dns` | `"true"` | Install the `[dns]` extra for the CAA, SPF, DMARC and DKIM checks |
 | `python-version` | `"3.12"` | Python version to run with |
 
-For reproducible runs, pin the action to a commit SHA instead of `@main`.
+| Output | Meaning |
+|---|---|
+| `score` | Lowest score (0–100) across the targets |
+| `grade` | Worst grade (A–F) across the targets |
+| `exit-code` | The tool's exit code (see above) |
+| `report` | Path of the Markdown report file, e.g. to attach to an issue |
+
+For a fully reproducible workflow, pin the action to the release's commit SHA instead of the tag. The SecuritySolution.tech website runs this action every day alongside its own posture script.
+
+## How it works
+
+- **The response.** The target is fetched once (redirects followed) and the headers, cookies and status of the final response are checked. A second request with `Origin: https://web-posture-check.invalid`, a reserved domain that cannot exist (RFC 2606), tests CORS: a site that trusts it trusts any website.
+- **TLS.** The certificate is read with the standard verifying TLS context. TLS 1.0 and 1.1 are each probed with a handshake allowed only that version; OpenSSL 3 will not offer them at its default security level, so the probe lowers it for that connection only, and if it still cannot offer one the result is a WARN, never a pass.
+- **DNS.** CAA is read for the host, climbing to parent domains as certificate authorities do (RFC 8659). SPF, DMARC and DKIM are read for the mail domain (`www.` removed); DMARC falls back to the organizational domain as receivers do; DKIM is looked up at `<selector>._domainkey.<domain>` for Google Workspace, Microsoft 365, Mailchimp, SendGrid, Cloudflare Email Routing and common defaults, or for `--dkim-selector`.
+- **Transport.** The same host and path are requested over `http://` (default port for an `https://` target, the target's own port for an `http://` one) to see whether it ends up on HTTPS.
+- **Concurrency and `--insecure`.** Targets are scanned in a thread pool. A target scanned with `--insecure` gets its own unverified TLS context passed down its call chain only, so it can never affect another target's requests.
 
 ## Development
 
@@ -202,37 +254,31 @@ python -m unittest discover -s tests -v
 ruff check src tests
 ```
 
-Without the `[dns]` extra, the few tests that drive dnspython are skipped. CI lints with Ruff (rules pinned in `pyproject.toml`), runs the suite on Python 3.9, 3.11 and 3.13, and a second workflow runs the GitHub Action from the checkout, including a case that must fail.
-
-Layout of `src/webposture/`:
-
-| Module | Role |
+| Module (`src/webposture/`) | Role |
 |---|---|
-| `cli.py` | Argument parsing and the loop over targets |
+| `cli.py` | Arguments, `--list-checks`, the loop over targets |
 | `runner.py` | Scanning one target: fetch, run the selected checks, exit code |
 | `fetch.py` | HTTP requests, redirects, retries and error messages |
-| `output.py` | Text, JSON and Markdown output (`markdown.py` renders the report) |
+| `output.py`, `markdown.py` | Text, JSON and Markdown rendering |
 | `headers.py`, `cookies.py`, `cors.py`, `tls.py`, `transport.py`, `caa.py`, `securitytxt.py`, `emailauth.py` | The checks |
 | `score.py`, `findings.py` | Score and grade, and the `Finding` type |
 
-Checks are pure functions that take the response headers and return a finding, so new checks can be tested without network access. `tests/test_end_to_end.py` also runs the real CLI against small web servers on `127.0.0.1` (one well configured, one not), so the fetching, the CORS probe, the security.txt request and the output formats are tested together, still without internet access.
+Checks are pure functions that take a response and return a `Finding`, so most tests need no network. `tests/test_end_to_end.py` runs the real CLI against small web servers on `127.0.0.1`. CI lints with Ruff, runs the suite on Python 3.9, 3.11 and 3.13, and runs the GitHub Action from the checkout, including a case that must fail. Dependabot keeps the SHA-pinned actions and the Python tooling current.
 
 ## Releases
 
-Changes are listed in [CHANGELOG.md](CHANGELOG.md). Pushing a tag such as `v0.2.0` runs `.github/workflows/release.yml`, which checks that the tag matches the package version, builds the package and publishes it to PyPI with Trusted Publishing, so no PyPI token is stored in the repository.
+Changes are listed in [CHANGELOG.md](CHANGELOG.md). Pushing a tag such as `v0.3.0` runs [`release.yml`](.github/workflows/release.yml): it checks the tag matches the package version, builds and checks the package, and publishes it to PyPI with Trusted Publishing, so no PyPI token exists anywhere. Every published file carries a PyPI attestation linking it to that workflow.
 
 ## Contributing and security
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests and guidelines. To report a vulnerability in the tool, follow [SECURITY.md](SECURITY.md) rather than opening a public issue.
+Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). To report a vulnerability in the tool itself, follow [SECURITY.md](SECURITY.md) instead of opening a public issue.
 
 ## Authors
-
-web-posture-check is built by:
 
 - **Mohammad Thabet** ([@MohammadThabetHassan](https://github.com/MohammadThabetHassan))
 - **Omar Alraas** ([@omaralraas](https://github.com/omaralraas))
 
-Most changes are made as pull requests that both authors work on, so each one is co-authored by both.
+Most changes are pull requests that both authors work on, so each is co-authored by both.
 
 ## License
 
