@@ -607,5 +607,36 @@ class ListChecksAndOutputTest(unittest.TestCase):
         self.assertIn("could not write --output", err.getvalue())
 
 
+class ActionOutputsTest(unittest.TestCase):
+    """The Action's score/grade outputs aggregate across targets. No network needed."""
+
+    def test_lowest_score_and_worst_grade_across_targets(self):
+        # The Action reads the Markdown report for each target's "**Grade X**
+        # (N/100)" line and outputs the lowest score and worst grade (the scan
+        # step in action.yml). The CI output checks only use one target, so the
+        # cross-target min/max is covered here. The regex is taken from
+        # action.yml, so this also guards that it still matches the report.
+        import re
+        from datetime import datetime, timezone
+
+        from webposture import markdown
+
+        action = os.path.join(os.path.dirname(__file__), "..", "action.yml")
+        with open(action, encoding="utf-8") as handle:
+            match = re.search(r'findall\(r"(.+?)",', handle.read())
+        self.assertIsNotNone(match, "could not find the score/grade regex in action.yml")
+        pattern = match.group(1)
+
+        now = datetime(2026, 10, 10, tzinfo=timezone.utc)
+        reports = [
+            markdown.render("https://good.example/", 200, [Finding("hsts", "PASS", "ok")], "0.3.0", now, score=(100, "A")),
+            markdown.render("https://bad.example/", 200, [Finding("hsts", "FAIL", "missing")], "0.3.0", now, score=(55, "F")),
+        ]
+        found = re.findall(pattern, "\n".join(reports))
+        self.assertEqual(len(found), 2)  # the regex still matches the report format
+        self.assertEqual(min(int(s) for _, s in found), 55)
+        self.assertEqual(max(g for g, _ in found), "F")
+
+
 if __name__ == "__main__":
     unittest.main()
