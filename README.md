@@ -51,7 +51,7 @@ Score: 55/100 (grade F)
   [PASS] information-leakage: no server version or stack headers
   [PASS] cookies: no cookies set
   [PASS] cors: no Access-Control-Allow-Origin for a foreign origin
-  [PASS] tls-certificate: certificate valid until 2026-12-25 (77 days)
+  [PASS] tls-certificate: certificate valid until 2026-12-25 (76 days)
   [FAIL] tls-protocols: server accepts TLS 1.0, TLS 1.1, which are deprecated (RFC 8996)
   [WARN] caa: no CAA record, so any certificate authority may issue certificates for this host
   [WARN] security-txt: no /.well-known/security.txt, so researchers have no published way to report vulnerabilities
