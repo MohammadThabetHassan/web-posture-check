@@ -14,6 +14,21 @@ from .findings import FAIL, WARN, SKIPPED_PREFIX, Finding
 
 USER_AGENT = f"web-posture-check/{__version__}"
 
+# True only while scanning a target whose certificate already failed
+# verification and --insecure was given. Every HTTPS request of the tool then
+# skips verification; at all other times requests verify as normal.
+_INSECURE = False
+
+
+def _https_context():
+    """The TLS context for the tool's HTTPS requests: None (verify) unless _INSECURE."""
+    if not _INSECURE:
+        return None
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    return context
+
 
 def fetch_headers(url, timeout, extra_headers=None):
     """Return (final URL, headers dict, list of Set-Cookie values, HTTP status).
@@ -23,7 +38,7 @@ def fetch_headers(url, timeout, extra_headers=None):
     """
     request = urllib.request.Request(url, method="GET", headers={"User-Agent": USER_AGENT, **(extra_headers or {})})
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urllib.request.urlopen(request, timeout=timeout, context=_https_context()) as response:
             return response.geturl(), dict(response.headers.items()), response.headers.get_all("Set-Cookie") or [], response.status
     except urllib.error.HTTPError as err:
         # Error pages still carry the site's headers, so check them anyway.
@@ -46,7 +61,7 @@ def fetch_final_url(url, timeout):
     """Follow redirects from url and return where they end, or None if nothing answered."""
     request = urllib.request.Request(url, method="GET", headers={"User-Agent": USER_AGENT})
     recorder = _RedirectRecorder()
-    opener = urllib.request.build_opener(recorder)
+    opener = urllib.request.build_opener(recorder, urllib.request.HTTPSHandler(context=_https_context()))
     try:
         with opener.open(request, timeout=timeout) as response:
             return response.geturl()
@@ -96,7 +111,7 @@ def check_security_txt(url, timeout):
     txt_url = f"{parts.scheme}://{parts.netloc}{securitytxt.PATH}"
     request = urllib.request.Request(txt_url, method="GET", headers={"User-Agent": USER_AGENT})
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        with urllib.request.urlopen(request, timeout=timeout, context=_https_context()) as response:
             # A real security.txt is a few KB; cap the read so a huge page cannot stall the run.
             body = response.read(64 * 1024).decode("utf-8", errors="replace")
             status, content_type = response.status, response.headers.get("Content-Type")
@@ -196,6 +211,9 @@ def main(argv=None):
     output.add_argument("--json", action="store_const", const="json", dest="format",
                         help="same as --format json")
     parser.add_argument("--timeout", type=float, default=10.0, help="request timeout in seconds (default 10)")
+    parser.add_argument("--insecure", action="store_true",
+                        help="if a target's certificate is not trusted, still run the other checks without verification "
+                             "(the certificate is reported as FAIL)")
     parser.add_argument("--retries", type=int, default=1, choices=range(0, 6), metavar="N",
                         help="retry a target's first request up to N times after a timeout or dropped connection (default 1, max 5)")
     parser.add_argument("--fail-on", choices=("fail", "warn"), default="fail",
@@ -268,26 +286,55 @@ def describe_fetch_error(url, err, timeout, attempts):
 
 def scan(target, args):
     """Run the selected checks on one target. Returns (result or None, exit code)."""
+    url = normalise_target(target)
+    try:
+        fetched = fetch_with_retries(url, args.timeout, args.retries)
+    except (urllib.error.URLError, OSError) as err:
+        reason = getattr(err, "reason", err)
+        if isinstance(reason, ssl.SSLCertVerificationError):
+            # A broken certificate is itself the most important finding, so
+            # report it instead of aborting.
+            finding = tls.check_certificate(None, reason.verify_code, reason.verify_message, now=datetime.now(timezone.utc))
+            if args.insecure:
+                return _scan_insecure(url, args, finding)
+            return {"url": url, "status": None, "findings": [finding],
+                    "note": "other checks skipped: no trusted HTTPS connection (--insecure runs them anyway)"}, 1
+        print(f"error: {describe_fetch_error(url, err, args.timeout, args.retries + 1)}", file=sys.stderr)
+        return None, 2
+    return run_checks(url, fetched, args)
+
+
+def _scan_insecure(url, args, cert_finding):
+    """Run the checks without certificate verification after the certificate failed.
+
+    The certificate failure stays in the report, first and whatever --only or
+    --skip say, and the run still exits at least 1.
+    """
+    global _INSECURE
+    _INSECURE = True
+    try:
+        result, code = run_checks(url, fetch_with_retries(url, args.timeout, args.retries), args)
+    except (urllib.error.URLError, OSError) as err:
+        print(f"error: {describe_fetch_error(url, err, args.timeout, args.retries + 1)}", file=sys.stderr)
+        return {"url": url, "status": None, "findings": [cert_finding],
+                "note": "other checks skipped: the target could not be fetched even without certificate verification"}, 1
+    finally:
+        _INSECURE = False
+    # check_tls verifies on its own and would repeat the same failure.
+    others = [f for f in result["findings"] if f.check != "tls-certificate"]
+    result["findings"] = [cert_finding] + others
+    result["note"] = "certificate not trusted; the other checks ran with --insecure (no certificate verification)"
+    return result, max(code, 1)
+
+
+def run_checks(url, fetched, args):
+    """Run the selected checks on a fetched target. Returns (result, exit code)."""
+    final_url, response_headers, set_cookies, status = fetched
 
     def wanted(name):
         if args.only is not None:
             return name in args.only
         return args.skip is None or name not in args.skip
-
-    url = normalise_target(target)
-    try:
-        final_url, response_headers, set_cookies, status = fetch_with_retries(url, args.timeout, args.retries)
-    except (urllib.error.URLError, OSError) as err:
-        reason = getattr(err, "reason", err)
-        if isinstance(reason, ssl.SSLCertVerificationError):
-            # A broken certificate is itself the most important finding, so
-            # report it instead of aborting. Without a trusted connection there
-            # is no response to run the other checks on.
-            finding = tls.check_certificate(None, reason.verify_code, reason.verify_message, now=datetime.now(timezone.utc))
-            return {"url": url, "status": None, "findings": [finding],
-                    "note": "other checks skipped: no trusted HTTPS connection"}, 1
-        print(f"error: {describe_fetch_error(url, err, args.timeout, args.retries + 1)}", file=sys.stderr)
-        return None, 2
 
     # Checks that need their own requests are wrapped in lambdas, so a check
     # left out with --only/--skip never touches the network.

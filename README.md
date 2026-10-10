@@ -98,7 +98,7 @@ JSON output has top-level `score` and `grade` fields, and the Markdown summary s
 
 This makes it easy to use as a gate in CI. For a strict gate, `--fail-on warn` also exits 1 on any WARN; checks reported as skipped (such as DNS checks without the optional extra) do not count, since they say nothing about the site.
 
-If the target's certificate is expired or not trusted, that is reported as a `tls-certificate` FAIL and the run exits with 1. The other checks are skipped, because there is no trusted connection to read the response from.
+If the target's certificate is expired or not trusted, that is reported as a `tls-certificate` FAIL and the run exits with 1. The other checks are skipped, because there is no trusted connection to read the response from. With `--insecure`, the other checks run anyway without certificate verification, for that target only: the certificate FAIL stays first in the report (even with `--only`), a note says the checks ran without verification, and the run still exits with at least 1. Trusted sites are never fetched without verification.
 
 ## Checks
 

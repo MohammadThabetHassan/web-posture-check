@@ -346,5 +346,61 @@ class RetryTest(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 2)
 
 
+class InsecureTest(unittest.TestCase):
+    """--insecure runs the checks after a certificate failure, and only then. No network needed."""
+
+    OK = ("https://bad-cert.example/", {"Strict-Transport-Security": "max-age=31536000"}, [], 200)
+
+    def _run(self, *argv):
+        contexts = []
+
+        def fetch(url, timeout, extra_headers=None):
+            # Record whether verification was off for this request.
+            contexts.append(cli._https_context())
+            if contexts[-1] is None:
+                raise _cert_error(10, "certificate has expired")
+            return self.OK
+
+        out = io.StringIO()
+        with mock.patch.object(cli, "fetch_headers", side_effect=fetch), redirect_stdout(out):
+            code = cli.main(["bad-cert.example", "--json", *argv])
+        return code, json.loads(out.getvalue()), contexts
+
+    def test_without_insecure_nothing_is_fetched_unverified(self):
+        code, result, contexts = self._run("--only", "hsts")
+        self.assertEqual(contexts, [None])
+        self.assertEqual([f["check"] for f in result["findings"]], ["tls-certificate"])
+        self.assertIn("--insecure runs them anyway", result["note"])
+        self.assertEqual(code, 1)
+
+    def test_insecure_runs_the_checks_without_verification(self):
+        code, result, contexts = self._run("--only", "hsts", "--insecure")
+        self.assertIsNone(contexts[0])
+        self.assertEqual(contexts[1].verify_mode, ssl.CERT_NONE)
+        self.assertFalse(contexts[1].check_hostname)
+        self.assertEqual([f["check"] for f in result["findings"]], ["tls-certificate", "hsts"])
+        self.assertEqual(result["findings"][0]["status"], "FAIL")
+        self.assertEqual(result["findings"][1]["status"], "PASS")
+        self.assertIn("ran with --insecure", result["note"])
+        # The certificate failure keeps the run failing even when every other check passes.
+        self.assertEqual(code, 1)
+
+    def test_verification_is_switched_back_on_afterwards(self):
+        self._run("--only", "hsts", "--insecure")
+        self.assertFalse(cli._INSECURE)
+        self.assertIsNone(cli._https_context())
+
+    def test_insecure_does_nothing_for_a_trusted_site(self):
+        contexts = []
+
+        def fetch(url, timeout, extra_headers=None):
+            contexts.append(cli._https_context())
+            return ("https://good.example/", {}, [], 200)
+
+        with mock.patch.object(cli, "fetch_headers", side_effect=fetch), redirect_stdout(io.StringIO()):
+            cli.main(["good.example", "--only", "hsts", "--insecure"])
+        self.assertEqual(contexts, [None])
+
+
 if __name__ == "__main__":
     unittest.main()
