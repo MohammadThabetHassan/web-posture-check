@@ -3,8 +3,8 @@ import unittest
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from webposture import cors
-from webposture.cli import probe_cors
 from webposture.findings import FAIL, PASS, WARN
+from webposture.runner import probe_cors
 
 PROBE = cors.PROBE_ORIGIN
 

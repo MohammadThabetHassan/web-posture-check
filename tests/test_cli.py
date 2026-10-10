@@ -8,7 +8,8 @@ import urllib.error
 from contextlib import redirect_stdout
 from unittest import mock
 
-from webposture import cli, emailauth
+from webposture import cli, emailauth, fetch, runner
+from webposture.findings import Finding
 
 
 def _cert_error(code, message):
@@ -28,14 +29,14 @@ class CertificateErrorTest(unittest.TestCase):
         return code, out.getvalue()
 
     def test_expired_certificate_is_reported_and_exits_1(self):
-        with mock.patch.object(cli, "fetch_headers", side_effect=_cert_error(10, "certificate has expired")):
+        with mock.patch.object(fetch, "fetch_headers", side_effect=_cert_error(10, "certificate has expired")):
             code, out = self._run("expired.example")
         self.assertEqual(code, 1)
         self.assertIn("[FAIL] tls-certificate: certificate has expired", out)
         self.assertIn("other checks skipped", out)
 
     def test_untrusted_certificate_in_json(self):
-        with mock.patch.object(cli, "fetch_headers", side_effect=_cert_error(62, "Hostname mismatch")):
+        with mock.patch.object(fetch, "fetch_headers", side_effect=_cert_error(62, "Hostname mismatch")):
             code, out = self._run("wrong.example", "--json")
         result = json.loads(out)
         self.assertEqual(code, 1)
@@ -46,7 +47,7 @@ class CertificateErrorTest(unittest.TestCase):
     def test_certificate_error_json_carries_skip_note(self):
         # --json documents a top-level note explaining that the other checks
         # were skipped. A consumer parsing the output relies on it, so pin it.
-        with mock.patch.object(cli, "fetch_headers", side_effect=_cert_error(10, "certificate has expired")):
+        with mock.patch.object(fetch, "fetch_headers", side_effect=_cert_error(10, "certificate has expired")):
             code, out = self._run("expired.example", "--json")
         result = json.loads(out)
         self.assertEqual(code, 1)
@@ -55,7 +56,7 @@ class CertificateErrorTest(unittest.TestCase):
 
     def test_other_fetch_errors_still_exit_2(self):
         err = urllib.error.URLError(OSError("Name or service not known"))
-        with mock.patch.object(cli, "fetch_headers", side_effect=err), redirect_stdout(io.StringIO()), \
+        with mock.patch.object(fetch, "fetch_headers", side_effect=err), redirect_stdout(io.StringIO()), \
                 mock.patch("sys.stderr", new_callable=io.StringIO):
             self.assertEqual(cli.main(["missing.example"]), 2)
 
@@ -72,7 +73,7 @@ class DmarcFallbackTest(unittest.TestCase):
             return [], None  # every other name, including the subdomain, has nothing
 
         with mock.patch.object(emailauth, "lookup_txt", side_effect=fake_lookup):
-            finding = cli.check_dmarc("https://mail.google.com/", 5)
+            finding = runner.check_dmarc("https://mail.google.com/", 5)
         self.assertEqual(finding.status, "PASS")
         self.assertIn("_dmarc.google.com", finding.detail)
 
@@ -90,7 +91,7 @@ class DkimSelectorTest(unittest.TestCase):
             return [], None
 
         with mock.patch.object(emailauth, "lookup_txt", side_effect=fake_lookup):
-            finding = cli.check_dkim("https://example.com/", 5, selectors=["custom"])
+            finding = runner.check_dkim("https://example.com/", 5, selectors=["custom"])
         self.assertEqual(finding.status, "PASS")
         self.assertIn("custom", finding.detail)
         # The common selectors must not be probed once a selector is given.
@@ -108,11 +109,11 @@ class CheckSelectionTest(unittest.TestCase):
 
     def _run(self, *argv):
         called = []
-        patches = [mock.patch.object(cli, "fetch_headers", return_value=("https://example.com/", {}, [], 200)),
-                   mock.patch.object(cli, "fetch_final_url", side_effect=lambda *a: called.append("https-redirect") or "https://example.com/")]
+        patches = [mock.patch.object(fetch, "fetch_headers", return_value=("https://example.com/", {}, [], 200)),
+                   mock.patch.object(fetch, "fetch_final_url", side_effect=lambda *a, **k: called.append("https-redirect") or "https://example.com/")]
         for func, name in self.NETWORK.items():
             patches.append(mock.patch.object(
-                cli, func, side_effect=lambda *a, _n=name: called.append(_n) or cli.Finding(_n, "PASS", "ok")))
+                runner, func, side_effect=lambda *a, _n=name, **k: called.append(_n) or Finding(_n, "PASS", "ok")))
         out = io.StringIO()
         for p in patches:
             p.start()
@@ -123,7 +124,7 @@ class CheckSelectionTest(unittest.TestCase):
 
     def test_default_runs_every_check_in_documented_order(self):
         _, checks, _ = self._run()
-        self.assertEqual(checks, cli.ALL_CHECKS)
+        self.assertEqual(checks, runner.ALL_CHECKS)
 
     def test_only_runs_the_named_checks_and_nothing_else(self):
         _, checks, called = self._run("--only", "tls-certificate,caa,hsts")
@@ -165,7 +166,7 @@ class ScoreOutputTest(unittest.TestCase):
 
     def test_json_carries_score_and_grade(self):
         out = io.StringIO()
-        with mock.patch.object(cli, "fetch_headers", return_value=("https://example.com/", {}, [], 200)), \
+        with mock.patch.object(fetch, "fetch_headers", return_value=("https://example.com/", {}, [], 200)), \
                 redirect_stdout(out):
             code = cli.main(["example.com", "--only", "http-status,hsts", "--json"])
         result = json.loads(out.getvalue())
@@ -184,14 +185,14 @@ class MultipleTargetsTest(unittest.TestCase):
         "https://bad.example": ("https://bad.example/", {}, [], 200),
     }
 
-    def _fetch(self, url, timeout, extra_headers=None):
+    def _fetch(self, url, timeout, extra_headers=None, context=None):
         if url not in self.RESPONSES:
             raise urllib.error.URLError(OSError("Name or service not known"))
         return self.RESPONSES[url]
 
     def _run(self, *argv):
         out = io.StringIO()
-        with mock.patch.object(cli, "fetch_headers", side_effect=self._fetch), redirect_stdout(out), \
+        with mock.patch.object(fetch, "fetch_headers", side_effect=self._fetch), redirect_stdout(out), \
                 mock.patch("sys.stderr", new_callable=io.StringIO):
             code = cli.main([*argv, "--only", "hsts"])
         return code, out.getvalue()
@@ -253,7 +254,7 @@ class FailOnTest(unittest.TestCase):
     HEADERS = {"Strict-Transport-Security": "max-age=31536000"}
 
     def _code(self, *argv):
-        with mock.patch.object(cli, "fetch_headers", return_value=("https://example.com/", self.HEADERS, [], 200)), \
+        with mock.patch.object(fetch, "fetch_headers", return_value=("https://example.com/", self.HEADERS, [], 200)), \
                 redirect_stdout(io.StringIO()):
             return cli.main(["example.com", "--only", "hsts,referrer-policy", *argv])
 
@@ -265,22 +266,22 @@ class FailOnTest(unittest.TestCase):
         self.assertEqual(self._code("--fail-on", "warn"), 1)
 
     def test_fail_on_warn_passes_a_clean_run(self):
-        with mock.patch.object(cli, "fetch_headers", return_value=("https://example.com/", self.HEADERS, [], 200)), \
+        with mock.patch.object(fetch, "fetch_headers", return_value=("https://example.com/", self.HEADERS, [], 200)), \
                 redirect_stdout(io.StringIO()):
             self.assertEqual(cli.main(["example.com", "--only", "hsts", "--fail-on", "warn"]), 0)
 
     def test_skipped_checks_do_not_trip_fail_on_warn(self):
-        skipped = cli.Finding("spf", "WARN", "skipped: install the optional DNS support")
-        passed = cli.Finding("hsts", "PASS", "ok")
-        self.assertEqual(cli.exit_code([passed, skipped], "warn"), 0)
-        self.assertEqual(cli.exit_code([passed, cli.Finding("caa", "WARN", "no CAA record")], "warn"), 1)
+        skipped = Finding("spf", "WARN", "skipped: install the optional DNS support")
+        passed = Finding("hsts", "PASS", "ok")
+        self.assertEqual(runner.exit_code([passed, skipped], "warn"), 0)
+        self.assertEqual(runner.exit_code([passed, Finding("caa", "WARN", "no CAA record")], "warn"), 1)
 
     def test_fail_on_warn_still_exits_1_on_a_fail(self):
         # warn is a superset of fail: raising the bar to warnings must not stop
         # a FAIL from failing the gate. Guards against warn meaning only {WARN}.
-        passed = cli.Finding("hsts", "PASS", "ok")
-        failed = cli.Finding("csp", "FAIL", "Content-Security-Policy header is missing")
-        self.assertEqual(cli.exit_code([passed, failed], "warn"), 1)
+        passed = Finding("hsts", "PASS", "ok")
+        failed = Finding("csp", "FAIL", "Content-Security-Policy header is missing")
+        self.assertEqual(runner.exit_code([passed, failed], "warn"), 1)
 
     def test_invalid_level_is_a_usage_error(self):
         with mock.patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit) as ctx:
@@ -294,22 +295,22 @@ class RetryTest(unittest.TestCase):
     OK = ("https://example.com/", {"Strict-Transport-Security": "max-age=31536000"}, [], 200)
 
     def setUp(self):
-        sleep = mock.patch.object(cli.time, "sleep")
+        sleep = mock.patch.object(fetch.time, "sleep")
         self.sleep = sleep.start()
         self.addCleanup(sleep.stop)
 
     def _run(self, side_effect, *argv):
-        fetch = mock.Mock(side_effect=side_effect)
+        fake_fetch = mock.Mock(side_effect=side_effect)
         out, err = io.StringIO(), io.StringIO()
-        with mock.patch.object(cli, "fetch_headers", fetch), redirect_stdout(out), mock.patch("sys.stderr", err):
+        with mock.patch.object(fetch, "fetch_headers", fake_fetch), redirect_stdout(out), mock.patch("sys.stderr", err):
             code = cli.main(["example.com", "--only", "hsts", *argv])
-        return code, fetch.call_count, err.getvalue()
+        return code, fake_fetch.call_count, err.getvalue()
 
     def test_timeout_then_success_is_retried_once(self):
         code, calls, err = self._run([urllib.error.URLError(TimeoutError("timed out")), self.OK])
         self.assertEqual((code, calls), (0, 2))
         self.assertEqual(err, "")
-        self.sleep.assert_called_once_with(cli.RETRY_DELAY_SECONDS)
+        self.sleep.assert_called_once_with(fetch.RETRY_DELAY_SECONDS)
 
     def test_connection_reset_is_retried(self):
         code, calls, _ = self._run([urllib.error.URLError(ConnectionResetError(10054, "forcibly closed")), self.OK])
@@ -354,15 +355,15 @@ class InsecureTest(unittest.TestCase):
     def _run(self, *argv):
         contexts = []
 
-        def fetch(url, timeout, extra_headers=None):
+        def fake_fetch(url, timeout, extra_headers=None, context=None):
             # Record whether verification was off for this request.
-            contexts.append(cli._https_context())
-            if contexts[-1] is None:
+            contexts.append(context)
+            if context is None:
                 raise _cert_error(10, "certificate has expired")
             return self.OK
 
         out = io.StringIO()
-        with mock.patch.object(cli, "fetch_headers", side_effect=fetch), redirect_stdout(out):
+        with mock.patch.object(fetch, "fetch_headers", side_effect=fake_fetch), redirect_stdout(out):
             code = cli.main(["bad-cert.example", "--json", *argv])
         return code, json.loads(out.getvalue()), contexts
 
@@ -389,35 +390,75 @@ class InsecureTest(unittest.TestCase):
         # Under --insecure, check_tls verifies on its own and re-reports the
         # same failure. When tls-certificate is among the checks, that duplicate
         # must be dropped so the report shows the single prepended cert FAIL.
-        def fetch(url, timeout, extra_headers=None):
-            if cli._https_context() is None:
+        def fake_fetch(url, timeout, extra_headers=None, context=None):
+            if context is None:
                 raise _cert_error(10, "certificate has expired")
             return self.OK
 
-        duplicate = cli.Finding("tls-certificate", "FAIL", "certificate has expired")
+        duplicate = Finding("tls-certificate", "FAIL", "certificate has expired")
         out = io.StringIO()
-        with mock.patch.object(cli, "fetch_headers", side_effect=fetch), \
-                mock.patch.object(cli, "check_tls", return_value=duplicate), redirect_stdout(out):
+        with mock.patch.object(fetch, "fetch_headers", side_effect=fake_fetch), \
+                mock.patch.object(runner, "check_tls", return_value=duplicate), redirect_stdout(out):
             cli.main(["bad-cert.example", "--only", "hsts,tls-certificate", "--insecure", "--json"])
         checks = [f["check"] for f in json.loads(out.getvalue())["findings"]]
         self.assertEqual(checks.count("tls-certificate"), 1)
         self.assertEqual(checks, ["tls-certificate", "hsts"])
 
-    def test_verification_is_switched_back_on_afterwards(self):
-        self._run("--only", "hsts", "--insecure")
-        self.assertFalse(cli._INSECURE)
-        self.assertIsNone(cli._https_context())
+    def test_unverified_context_never_reaches_another_target(self):
+        # A broken-certificate site scanned with --insecure, then a trusted
+        # site in the same run: the trusted site must still be fetched with
+        # verification. The context is passed explicitly, never kept globally.
+        seen = []
+
+        def fake_fetch(url, timeout, extra_headers=None, context=None):
+            seen.append((url, context))
+            if url.startswith("https://bad-cert.example") and context is None:
+                raise _cert_error(10, "certificate has expired")
+            return (url, {}, [], 200)
+
+        with mock.patch.object(fetch, "fetch_headers", side_effect=fake_fetch), redirect_stdout(io.StringIO()):
+            cli.main(["bad-cert.example", "good.example", "--only", "hsts", "--insecure"])
+        good = [context for url, context in seen if url.startswith("https://good.example")]
+        self.assertEqual(good, [None])
+        self.assertTrue(any(context is not None for url, context in seen if url.startswith("https://bad-cert.example")))
 
     def test_insecure_does_nothing_for_a_trusted_site(self):
         contexts = []
 
-        def fetch(url, timeout, extra_headers=None):
-            contexts.append(cli._https_context())
+        def fake_fetch(url, timeout, extra_headers=None, context=None):
+            contexts.append(context)
             return ("https://good.example/", {}, [], 200)
 
-        with mock.patch.object(cli, "fetch_headers", side_effect=fetch), redirect_stdout(io.StringIO()):
+        with mock.patch.object(fetch, "fetch_headers", side_effect=fake_fetch), redirect_stdout(io.StringIO()):
             cli.main(["good.example", "--only", "hsts", "--insecure"])
         self.assertEqual(contexts, [None])
+
+    def test_insecure_context_reaches_security_txt_and_redirect_requests(self):
+        # The existing tests only cover fetch_headers (main fetch and CORS probe).
+        # The security.txt (fetch_text) and https-redirect (fetch_final_url)
+        # requests must get the same unverified context, or they would re-verify
+        # on a broken-certificate site and report misleading results.
+        seen = {}
+
+        def fake_headers(url, timeout, extra_headers=None, context=None):
+            if context is None:
+                raise _cert_error(10, "certificate has expired")
+            return (url, {}, [], 200)
+
+        def fake_text(url, timeout, limit, context=None):
+            seen["security-txt"] = context
+            return (404, None, "")
+
+        def fake_final(url, timeout, context=None):
+            seen["https-redirect"] = context
+            return None
+
+        with mock.patch.object(fetch, "fetch_headers", side_effect=fake_headers), \
+                mock.patch.object(fetch, "fetch_text", side_effect=fake_text), \
+                mock.patch.object(fetch, "fetch_final_url", side_effect=fake_final), redirect_stdout(io.StringIO()):
+            cli.main(["bad-cert.example", "--only", "security-txt,https-redirect", "--insecure"])
+        self.assertEqual(seen["security-txt"].verify_mode, ssl.CERT_NONE)
+        self.assertEqual(seen["https-redirect"].verify_mode, ssl.CERT_NONE)
 
 
 if __name__ == "__main__":
