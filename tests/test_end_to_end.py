@@ -143,6 +143,19 @@ class EndToEndTest(unittest.TestCase):
         self.assertIn("bot protection", http_status["detail"])
         self.assertEqual(code, 1)
 
+    def test_https_redirect_checks_the_targets_own_port(self):
+        # The local server answers plain HTTP on a random port without
+        # redirecting. The check must probe that port and FAIL, not probe
+        # port 80, find nothing and wrongly PASS as "not reachable".
+        url = self._serve(_GoodSite)
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = cli.main([url, "--only", "https-redirect", "--json", "--retries", "0", "--timeout", "5"])
+        finding = json.loads(out.getvalue())["findings"][0]
+        self.assertEqual(finding["status"], "FAIL")
+        self.assertIn(f"{url} is served over plain HTTP", finding["detail"])
+        self.assertEqual(code, 1)
+
 
 if __name__ == "__main__":
     unittest.main()
