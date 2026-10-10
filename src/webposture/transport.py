@@ -24,8 +24,14 @@ def http_url_for(url):
         # An IPv6 literal must keep its brackets, or the rebuilt URL is
         # malformed and the plain-HTTP request silently fails.
         host = f"[{host}]"
-    if parts.scheme == "http" and parts.port:
-        host = f"{host}:{parts.port}"
+    try:
+        port = parts.port
+    except ValueError:
+        # A non-numeric or out-of-range port cannot be probed; fall back to the
+        # default port instead of raising.
+        port = None
+    if parts.scheme == "http" and port:
+        host = f"{host}:{port}"
     return urlunsplit(("http", host, parts.path or "/", parts.query, ""))
 
 

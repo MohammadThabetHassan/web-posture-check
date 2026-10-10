@@ -31,6 +31,12 @@ class HttpUrlTest(unittest.TestCase):
     def test_http_target_on_the_default_port_is_unchanged(self):
         self.assertEqual(transport.http_url_for("http://example.com/"), "http://example.com/")
 
+    def test_malformed_port_falls_back_to_the_default_instead_of_raising(self):
+        # Reading parts.port raises on a non-numeric or out-of-range port; the
+        # helper must not propagate that, it should drop the unusable port.
+        self.assertEqual(transport.http_url_for("http://example.com:notaport/x"), "http://example.com/x")
+        self.assertEqual(transport.http_url_for("http://example.com:99999999/"), "http://example.com/")
+
 
 class HttpsRedirectTest(unittest.TestCase):
     def test_redirect_to_https_passes(self):
