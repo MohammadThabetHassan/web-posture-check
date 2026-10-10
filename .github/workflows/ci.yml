@@ -17,7 +17,8 @@ jobs:
         with:
           python-version: "3.13"
       - run: pip install ".[dev]"
-      - run: ruff check src tests
+      # --output-format=github surfaces findings as inline annotations on the PR.
+      - run: ruff check --output-format=github src tests
 
   test:
     runs-on: ubuntu-latest
