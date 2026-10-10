@@ -1,5 +1,10 @@
 # web-posture-check
 
+[![CI](https://github.com/MohammadThabetHassan/web-posture-check/actions/workflows/ci.yml/badge.svg)](https://github.com/MohammadThabetHassan/web-posture-check/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/web-posture-check)](https://pypi.org/project/web-posture-check/)
+[![Python](https://img.shields.io/pypi/pyversions/web-posture-check)](https://pypi.org/project/web-posture-check/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 A small command-line tool that checks a website's security posture and tells you what to fix. The core has no third-party dependencies. Built by Mohammad Thabet and Omar Alraas (see [Authors](#authors)).
 
 It checks HTTP security headers, cookie flags, CORS, the TLS certificate, deprecated TLS versions, the CAA record, `security.txt`, the domain's SPF, DMARC and DKIM records, and that plain HTTP redirects to HTTPS.
@@ -7,17 +12,21 @@ It checks HTTP security headers, cookie flags, CORS, the TLS certificate, deprec
 ## Install
 
 ```bash
+pip install web-posture-check
+```
+
+Requires Python 3.9 or newer. To install from source instead:
+
+```bash
 git clone https://github.com/MohammadThabetHassan/web-posture-check.git
 cd web-posture-check
 pip install .
 ```
 
-Requires Python 3.9 or newer.
-
 The CAA, SPF, DMARC and DKIM checks read DNS records, which the standard library cannot do. Install the optional DNS support to enable them; without it they are reported as skipped:
 
 ```bash
-pip install ".[dns]"
+pip install "web-posture-check[dns]"
 ```
 
 ## Usage
@@ -207,6 +216,14 @@ Layout of `src/webposture/`:
 | `score.py`, `findings.py` | Score and grade, and the `Finding` type |
 
 Checks are pure functions that take the response headers and return a finding, so new checks can be tested without network access. `tests/test_end_to_end.py` also runs the real CLI against small web servers on `127.0.0.1` (one well configured, one not), so the fetching, the CORS probe, the security.txt request and the output formats are tested together, still without internet access.
+
+## Releases
+
+Changes are listed in [CHANGELOG.md](CHANGELOG.md). Pushing a tag such as `v0.2.0` runs `.github/workflows/release.yml`, which checks that the tag matches the package version, builds the package and publishes it to PyPI with Trusted Publishing, so no PyPI token is stored in the repository.
+
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, tests and guidelines. To report a vulnerability in the tool, follow [SECURITY.md](SECURITY.md) rather than opening a public issue.
 
 ## Authors
 

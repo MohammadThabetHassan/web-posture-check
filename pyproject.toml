@@ -1,16 +1,43 @@
 [build-system]
-requires = ["setuptools>=61"]
+# 77+ understands the SPDX license expression below.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "web-posture-check"
 dynamic = ["version"]
-description = "Check a website's security posture from the command line"
+description = "Check a website's security posture from the command line: headers, cookies, CORS, TLS, CAA, security.txt, SPF, DMARC and DKIM"
 readme = "README.md"
-license = { text = "MIT" }
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [{ name = "Mohammad Thabet" }, { name = "Omar Alraas" }]
 requires-python = ">=3.9"
+keywords = ["security", "security-headers", "tls", "cors", "spf", "dmarc", "dkim", "csp", "hsts", "devsecops", "cli"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Intended Audience :: Information Technology",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP",
+    "Topic :: Security",
+    "Topic :: System :: Networking :: Monitoring",
+]
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/MohammadThabetHassan/web-posture-check"
+Documentation = "https://github.com/MohammadThabetHassan/web-posture-check#readme"
+Issues = "https://github.com/MohammadThabetHassan/web-posture-check/issues"
+Changelog = "https://github.com/MohammadThabetHassan/web-posture-check/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 # DNS-based checks (CAA, SPF, DMARC, DKIM). The core tool stays dependency-free.
