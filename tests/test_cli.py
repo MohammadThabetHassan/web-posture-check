@@ -501,6 +501,24 @@ class ParallelTest(unittest.TestCase):
         self._main(fake_fetch, "a.example", "b.example", "c.example", "--jobs", "1")
         self.assertEqual(peak[0], 1)
 
+    def test_jobs_caps_concurrency_below_the_target_count(self):
+        # The anti-flood guarantee: with more targets than --jobs, no more than
+        # --jobs run at once. The serial (jobs 1) and full-width (jobs = count)
+        # cases don't cover an intermediate cap.
+        active, peak, lock = [0], [0], threading.Lock()
+
+        def fake_fetch(url, timeout, extra_headers=None, context=None):
+            with lock:
+                active[0] += 1
+                peak[0] = max(peak[0], active[0])
+            time.sleep(0.05)
+            with lock:
+                active[0] -= 1
+            return (url, {}, [], 200)
+
+        self._main(fake_fetch, "a.example", "b.example", "c.example", "d.example", "e.example", "--jobs", "2")
+        self.assertEqual(peak[0], 2)
+
     def test_results_keep_the_input_order_when_later_targets_finish_first(self):
         delays = {"https://slow.example": 0.3, "https://medium.example": 0.15, "https://fast.example": 0.0}
 
