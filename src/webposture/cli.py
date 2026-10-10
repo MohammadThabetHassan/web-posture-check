@@ -6,8 +6,12 @@ and output (text, JSON and Markdown).
 
 import argparse
 import sys
+from concurrent.futures import ThreadPoolExecutor
 
 from . import __version__, output, runner
+
+# More than this many simultaneous scans gains little and looks like a flood to the sites.
+MAX_JOBS = 16
 
 
 def parse_check_names(value):
@@ -48,6 +52,8 @@ def build_parser():
                              "(the certificate is reported as FAIL)")
     parser.add_argument("--retries", type=int, default=1, choices=range(6), metavar="N",
                         help="retry a target's first request up to N times after a timeout or dropped connection (default 1, max 5)")
+    parser.add_argument("--jobs", type=int, default=4, choices=range(1, MAX_JOBS + 1), metavar="N",
+                        help=f"scan up to N targets at the same time (default 4, max {MAX_JOBS}); results keep the input order")
     parser.add_argument("--fail-on", choices=("fail", "warn"), default="fail",
                         help="exit 1 on any FAIL (default), or with 'warn' on any WARN or FAIL")
     parser.add_argument("--dkim-selector", action="append", metavar="SELECTOR",
@@ -74,10 +80,14 @@ def main(argv=None):
     if not targets:
         parser.error("give at least one target, or --targets-file")
 
+    # map() returns the outcomes in input order, however the scans finish.
+    with ThreadPoolExecutor(max_workers=min(args.jobs, len(targets))) as pool:
+        outcomes = list(pool.map(lambda target: runner.scan(target, args), targets))
     results, codes = [], []
-    for target in targets:
-        result, code = runner.scan(target, args)
+    for result, code, error in outcomes:
         codes.append(code)
+        if error:
+            print(f"error: {error}", file=sys.stderr)
         if result is not None:
             results.append(result)
     output.report(args.format, results, single=len(targets) == 1)

@@ -67,7 +67,7 @@ Score: 55/100 (grade F)
 
 ### Multiple targets
 
-Give several targets, and/or `--targets-file FILE` with one target per line (blank lines and lines starting with `#` are ignored). Each target is scanned in turn and reported on its own. A target that cannot be reached is reported on stderr and the others still run. The exit code is the worst one across all targets: 2 if any target was unreachable, otherwise 1 if any FAIL, otherwise 0. With `--format json`, several targets give `{"results": [...]}` with one object per reachable target. A single target gives the plain object shown under [Output formats](#output-formats).
+Give several targets, and/or `--targets-file FILE` with one target per line (blank lines and lines starting with `#` are ignored). Up to 4 targets are scanned at the same time (`--jobs N` sets 1 to 16), and each is reported on its own in the order given, however the scans finish. A target that cannot be reached is reported on stderr, also in input order, and the others still run. An `--insecure` scan of one target never affects the requests of another. The exit code is the worst one across all targets: 2 if any target was unreachable, otherwise 1 if any FAIL, otherwise 0. With `--format json`, several targets give `{"results": [...]}` with one object per reachable target. A single target gives the plain object shown under [Output formats](#output-formats).
 
 ### Output formats
 
