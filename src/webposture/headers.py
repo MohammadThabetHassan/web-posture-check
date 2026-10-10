@@ -6,7 +6,7 @@ returns a Finding. Checks never make network calls, so they are easy to test.
 
 import re
 
-from .findings import Finding, PASS, WARN, FAIL
+from .findings import FAIL, PASS, WARN, Finding
 
 # Six months: the common scanner baseline. The HSTS preload list requires one year.
 HSTS_MIN_MAX_AGE = 15552000

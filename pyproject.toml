@@ -15,6 +15,8 @@ dependencies = []
 [project.optional-dependencies]
 # DNS-based checks (CAA, SPF, DMARC, DKIM). The core tool stays dependency-free.
 dns = ["dnspython>=2.0"]
+# Development tools, pinned so CI and local runs lint the same way.
+dev = ["ruff==0.17.0"]
 
 [project.scripts]
 web-posture-check = "webposture.cli:main"
@@ -24,3 +26,20 @@ version = { attr = "webposture.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.ruff]
+target-version = "py39"
+line-length = 130
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+# Pyflakes, pycodestyle errors and warnings, import order, bugbear, pyupgrade,
+# simplify, misc and Ruff's own rules. Listed explicitly so new Ruff releases
+# do not change what CI enforces.
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "PIE", "RUF"]
+# Finding messages are kept on one line so they stay easy to grep for.
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests keep fixed lookup tables as plain class attributes.
+"tests/*" = ["RUF012"]

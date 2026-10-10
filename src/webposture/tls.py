@@ -9,7 +9,7 @@ import ssl
 import warnings
 from datetime import datetime, timezone
 
-from .findings import Finding, PASS, WARN, FAIL
+from .findings import FAIL, PASS, WARN, Finding
 
 # Renewal automation (e.g. ACME clients) normally renews 30 days ahead, so a
 # certificate this close to expiry usually means renewal is failing.
@@ -27,9 +27,9 @@ def fetch_certificate(host, port=443, timeout=10.0):
     """
     context = ssl.create_default_context()
     try:
-        with socket.create_connection((host, port), timeout=timeout) as sock:
-            with context.wrap_socket(sock, server_hostname=host) as tls:
-                cert = tls.getpeercert()
+        with socket.create_connection((host, port), timeout=timeout) as sock, \
+                context.wrap_socket(sock, server_hostname=host) as tls:
+            cert = tls.getpeercert()
     except ssl.SSLCertVerificationError as err:
         return None, err.verify_code, err.verify_message
     not_after = datetime.fromtimestamp(ssl.cert_time_to_seconds(cert["notAfter"]), tz=timezone.utc)
@@ -96,9 +96,9 @@ def probe_version(host, port, version, timeout=10.0):
     except (ValueError, ssl.SSLError):
         return UNTESTABLE
     try:
-        with socket.create_connection((host, port), timeout=timeout) as sock:
-            with context.wrap_socket(sock, server_hostname=host):
-                return ACCEPTED
+        with socket.create_connection((host, port), timeout=timeout) as sock, \
+                context.wrap_socket(sock, server_hostname=host):
+            return ACCEPTED
     except OSError as err:
         return classify_handshake_error(err)
 

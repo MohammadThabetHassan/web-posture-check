@@ -1,7 +1,7 @@
 import unittest
 
 from webposture import transport
-from webposture.findings import PASS, WARN, FAIL
+from webposture.findings import FAIL, PASS, WARN
 
 
 class HttpUrlTest(unittest.TestCase):

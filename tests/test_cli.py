@@ -55,9 +55,9 @@ class CertificateErrorTest(unittest.TestCase):
 
     def test_other_fetch_errors_still_exit_2(self):
         err = urllib.error.URLError(OSError("Name or service not known"))
-        with mock.patch.object(cli, "fetch_headers", side_effect=err):
-            with redirect_stdout(io.StringIO()), mock.patch("sys.stderr", new_callable=io.StringIO):
-                self.assertEqual(cli.main(["missing.example"]), 2)
+        with mock.patch.object(cli, "fetch_headers", side_effect=err), redirect_stdout(io.StringIO()), \
+                mock.patch("sys.stderr", new_callable=io.StringIO):
+            self.assertEqual(cli.main(["missing.example"]), 2)
 
 
 class DmarcFallbackTest(unittest.TestCase):

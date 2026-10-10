@@ -188,11 +188,12 @@ For reproducible runs, pin the action to a commit SHA instead of `@main`.
 ## Development
 
 ```bash
-pip install -e ".[dns]"
+pip install -e ".[dns,dev]"
 python -m unittest discover -s tests -v
+ruff check src tests
 ```
 
-Without the `[dns]` extra, the few tests that drive dnspython are skipped. CI runs the suite on Python 3.9, 3.11 and 3.13, and a second workflow runs the GitHub Action from the checkout, including a case that must fail.
+Without the `[dns]` extra, the few tests that drive dnspython are skipped. CI lints with Ruff (rules pinned in `pyproject.toml`), runs the suite on Python 3.9, 3.11 and 3.13, and a second workflow runs the GitHub Action from the checkout, including a case that must fail.
 
 Checks are pure functions that take the response headers and return a finding, so new checks can be tested without network access. `tests/test_end_to_end.py` also runs the real CLI against small web servers on `127.0.0.1` (one well configured, one not), so the fetching, the CORS probe, the security.txt request and the output formats are tested together, still without internet access.
 

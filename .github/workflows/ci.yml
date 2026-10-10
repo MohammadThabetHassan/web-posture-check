@@ -9,6 +9,17 @@ permissions:
   contents: read
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install ".[dev]"
+      # --output-format=github surfaces findings as inline annotations on the PR.
+      - run: ruff check --output-format=github src tests
+
   test:
     runs-on: ubuntu-latest
     strategy:

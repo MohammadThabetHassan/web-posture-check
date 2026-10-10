@@ -3,7 +3,7 @@ import unittest
 from unittest import mock
 
 from webposture import emailauth
-from webposture.findings import PASS, WARN, FAIL
+from webposture.findings import FAIL, PASS, WARN
 
 try:
     import dns.resolver  # noqa: F401

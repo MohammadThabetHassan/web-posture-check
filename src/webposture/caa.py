@@ -5,7 +5,7 @@ check_caa takes the records and needs no network access.
 """
 
 from .emailauth import INSTALL_HINT, dmarc_candidates
-from .findings import Finding, PASS, WARN, SKIPPED_PREFIX
+from .findings import PASS, SKIPPED_PREFIX, WARN, Finding
 
 # Property tags defined by RFC 8659 and RFC 9495. A CA must refuse to issue
 # when it sees a critical flag on a tag it does not understand.

@@ -5,7 +5,7 @@ can be tested directly. The output is plain ASCII apart from the findings
 themselves, so it survives consoles and files that are not UTF-8.
 """
 
-from .findings import PASS, WARN, FAIL
+from .findings import FAIL, PASS, WARN
 
 _ORDER = {FAIL: 0, WARN: 1, PASS: 2}
 

@@ -2,7 +2,7 @@ import unittest
 from datetime import datetime, timezone
 
 from webposture import cookies
-from webposture.findings import PASS, WARN, FAIL
+from webposture.findings import FAIL, PASS, WARN
 
 
 class ParseSetCookieTest(unittest.TestCase):
