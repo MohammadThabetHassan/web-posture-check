@@ -3,6 +3,8 @@ import json
 import os
 import ssl
 import tempfile
+import threading
+import time
 import unittest
 import urllib.error
 from contextlib import redirect_stdout
@@ -459,6 +461,97 @@ class InsecureTest(unittest.TestCase):
             cli.main(["bad-cert.example", "--only", "security-txt,https-redirect", "--insecure"])
         self.assertEqual(seen["security-txt"].verify_mode, ssl.CERT_NONE)
         self.assertEqual(seen["https-redirect"].verify_mode, ssl.CERT_NONE)
+
+
+class ParallelTest(unittest.TestCase):
+    """--jobs scans targets at the same time and keeps the output in input order. No network needed."""
+
+    def _main(self, fake_fetch, *argv):
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(fetch, "fetch_headers", side_effect=fake_fetch), redirect_stdout(out), \
+                mock.patch("sys.stderr", err):
+            code = cli.main([*argv, "--only", "hsts", "--retries", "0"])
+        return code, out.getvalue(), err.getvalue()
+
+    def test_targets_really_run_at_the_same_time(self):
+        # Every fake request waits until all four are in flight. Run one at a
+        # time, the first would wait alone until the barrier times out.
+        barrier = threading.Barrier(4, timeout=5)
+
+        def fake_fetch(url, timeout, extra_headers=None, context=None):
+            barrier.wait()
+            return (url, {}, [], 200)
+
+        code, out, _ = self._main(fake_fetch, "a.example", "b.example", "c.example", "d.example", "--json", "--jobs", "4")
+        self.assertEqual(len(json.loads(out)["results"]), 4)
+        self.assertEqual(code, 1)  # hsts fails on every empty response
+
+    def test_jobs_1_scans_one_at_a_time(self):
+        active, peak, lock = [0], [0], threading.Lock()
+
+        def fake_fetch(url, timeout, extra_headers=None, context=None):
+            with lock:
+                active[0] += 1
+                peak[0] = max(peak[0], active[0])
+            time.sleep(0.05)
+            with lock:
+                active[0] -= 1
+            return (url, {}, [], 200)
+
+        self._main(fake_fetch, "a.example", "b.example", "c.example", "--jobs", "1")
+        self.assertEqual(peak[0], 1)
+
+    def test_results_keep_the_input_order_when_later_targets_finish_first(self):
+        delays = {"https://slow.example": 0.3, "https://medium.example": 0.15, "https://fast.example": 0.0}
+
+        def fake_fetch(url, timeout, extra_headers=None, context=None):
+            time.sleep(delays[url])
+            return (url + "/", {}, [], 200)
+
+        _, out, _ = self._main(fake_fetch, "slow.example", "medium.example", "fast.example", "--json")
+        urls = [r["url"] for r in json.loads(out)["results"]]
+        self.assertEqual(urls, ["https://slow.example/", "https://medium.example/", "https://fast.example/"])
+
+    def test_errors_are_printed_in_input_order(self):
+        delays = {"https://first-down.example": 0.3, "https://second-down.example": 0.0}
+
+        def fake_fetch(url, timeout, extra_headers=None, context=None):
+            time.sleep(delays[url])
+            raise urllib.error.URLError(OSError(f"cannot resolve {url}"))
+
+        code, _, err = self._main(fake_fetch, "first-down.example", "second-down.example")
+        lines = err.strip().splitlines()
+        self.assertEqual(len(lines), 2)
+        self.assertIn("first-down.example", lines[0])
+        self.assertIn("second-down.example", lines[1])
+        self.assertEqual(code, 2)
+
+    def test_insecure_context_stays_with_its_own_target_when_running_in_parallel(self):
+        # The broken-certificate target and the trusted one are scanned at the
+        # same moment; the trusted one must still be fetched with verification.
+        barrier = threading.Barrier(2, timeout=5)
+        seen, lock = [], threading.Lock()
+
+        def fake_fetch(url, timeout, extra_headers=None, context=None):
+            with lock:
+                seen.append((url, context))
+            if url.startswith("https://bad-cert.example") and context is None:
+                barrier.wait()
+                raise _cert_error(10, "certificate has expired")
+            if url.startswith("https://good.example"):
+                barrier.wait()
+            return (url, {}, [], 200)
+
+        self._main(fake_fetch, "bad-cert.example", "good.example", "--insecure", "--jobs", "2")
+        good = [context for url, context in seen if url.startswith("https://good.example")]
+        self.assertEqual(good, [None])
+        self.assertTrue(any(context is not None for url, context in seen if url.startswith("https://bad-cert.example")))
+
+    def test_jobs_must_be_between_1_and_16(self):
+        for value in ("0", "17"):
+            with mock.patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit) as ctx:
+                cli.main(["example.com", "--jobs", value])
+            self.assertEqual(ctx.exception.code, 2, value)
 
 
 if __name__ == "__main__":

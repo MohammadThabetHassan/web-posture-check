@@ -1,11 +1,13 @@
 """Scanning one target: fetch it, run the selected checks, decide the exit code.
 
+scan() keeps no state between targets and does no printing, so several
+targets can be scanned at once on different threads.
+
 Requests go through the fetch module by attribute (fetch.fetch_headers, ...),
 so a test that patches the fetch module intercepts every caller.
 """
 
 import ssl
-import sys
 import urllib.error
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
@@ -110,7 +112,12 @@ def check_caa(url, timeout):
 
 
 def scan(target, args):
-    """Run the selected checks on one target. Returns (result or None, exit code)."""
+    """Run the selected checks on one target.
+
+    Returns (result or None, exit code, error message or None). The error is
+    returned rather than printed, so the caller can print the errors of
+    targets scanned in parallel in a stable order.
+    """
     url = normalise_target(target)
     try:
         fetched = fetch.fetch_with_retries(url, args.timeout, args.retries)
@@ -123,10 +130,9 @@ def scan(target, args):
             if args.insecure:
                 return _scan_insecure(url, args, finding)
             return {"url": url, "status": None, "findings": [finding],
-                    "note": "other checks skipped: no trusted HTTPS connection (--insecure runs them anyway)"}, 1
-        print(f"error: {fetch.describe_fetch_error(url, err, args.timeout, args.retries + 1)}", file=sys.stderr)
-        return None, 2
-    return run_checks(url, fetched, args)
+                    "note": "other checks skipped: no trusted HTTPS connection (--insecure runs them anyway)"}, 1, None
+        return None, 2, fetch.describe_fetch_error(url, err, args.timeout, args.retries + 1)
+    return (*run_checks(url, fetched, args), None)
 
 
 def _scan_insecure(url, args, cert_finding):
@@ -141,15 +147,15 @@ def _scan_insecure(url, args, cert_finding):
     try:
         fetched = fetch.fetch_with_retries(url, args.timeout, args.retries, context=context)
     except (urllib.error.URLError, OSError) as err:
-        print(f"error: {fetch.describe_fetch_error(url, err, args.timeout, args.retries + 1)}", file=sys.stderr)
-        return {"url": url, "status": None, "findings": [cert_finding],
-                "note": "other checks skipped: the target could not be fetched even without certificate verification"}, 1
+        result = {"url": url, "status": None, "findings": [cert_finding],
+                  "note": "other checks skipped: the target could not be fetched even without certificate verification"}
+        return result, 1, fetch.describe_fetch_error(url, err, args.timeout, args.retries + 1)
     result, code = run_checks(url, fetched, args, context=context)
     # check_tls verifies on its own and would repeat the same failure.
     others = [f for f in result["findings"] if f.check != "tls-certificate"]
     result["findings"] = [cert_finding, *others]
     result["note"] = "certificate not trusted; the other checks ran with --insecure (no certificate verification)"
-    return result, max(code, 1)
+    return result, max(code, 1), None
 
 
 def run_checks(url, fetched, args, context=None):
