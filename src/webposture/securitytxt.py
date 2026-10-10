@@ -6,7 +6,7 @@ status, content type and body and returns a Finding. No network access.
 
 from datetime import datetime, timedelta
 
-from .findings import Finding, PASS, WARN
+from .findings import PASS, WARN, Finding
 
 PATH = "/.well-known/security.txt"
 

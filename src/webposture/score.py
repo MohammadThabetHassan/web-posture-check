@@ -13,7 +13,7 @@ Because the score is an average, it works the same for any --only/--skip
 selection.
 """
 
-from .findings import PASS, WARN, FAIL, SKIPPED_PREFIX
+from .findings import FAIL, PASS, SKIPPED_PREFIX, WARN
 
 POINTS = {PASS: 1.0, WARN: 0.5, FAIL: 0.0}
 GRADES = ((90, "A"), (80, "B"), (70, "C"), (60, "D"))

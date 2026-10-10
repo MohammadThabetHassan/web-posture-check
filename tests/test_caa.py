@@ -57,7 +57,7 @@ class LookupCaaTest(unittest.TestCase):
     def test_missing_dnspython_is_reported_as_skipped(self):
         blocked = {"dns": None, "dns.resolver": None, "dns.exception": None}
         with mock.patch.dict(sys.modules, blocked):
-            found_on, records, problem = caa.lookup_caa("example.com", 5)
+            found_on, _records, problem = caa.lookup_caa("example.com", 5)
         self.assertIsNone(found_on)
         self.assertIn("web-posture-check[dns]", problem)
 

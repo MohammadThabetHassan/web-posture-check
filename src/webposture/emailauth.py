@@ -6,7 +6,7 @@ is reported as skipped. The check_* functions take the TXT strings and need no
 network access.
 """
 
-from .findings import Finding, PASS, WARN, FAIL, SKIPPED_PREFIX
+from .findings import FAIL, PASS, SKIPPED_PREFIX, WARN, Finding
 
 INSTALL_HINT = 'install the optional DNS support with: pip install "web-posture-check[dns]"'
 
@@ -71,7 +71,7 @@ def dmarc_candidates(domain):
     two labels, which matches it for names like shop.example.com.
     """
     labels = domain.split(".")
-    return [".".join(labels[i:]) for i in range(0, max(len(labels) - 1, 1))]
+    return [".".join(labels[i:]) for i in range(max(len(labels) - 1, 1))]
 
 
 def dmarc_records(txt_strings):

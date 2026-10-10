@@ -4,7 +4,7 @@ The CLI requests the page again with an Origin header for a domain that
 cannot exist, then passes the response's CORS headers here. No network access.
 """
 
-from .findings import Finding, PASS, WARN, FAIL
+from .findings import FAIL, PASS, WARN, Finding
 
 # .invalid is reserved (RFC 2606), so no real site can legitimately be allowed.
 PROBE_ORIGIN = "https://web-posture-check.invalid"

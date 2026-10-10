@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
 from . import __version__, caa, cookies, cors, emailauth, headers, markdown, score, securitytxt, tls, transport
-from .findings import FAIL, WARN, SKIPPED_PREFIX, Finding
+from .findings import FAIL, SKIPPED_PREFIX, WARN, Finding
 
 USER_AGENT = f"web-posture-check/{__version__}"
 
@@ -173,9 +173,11 @@ def normalise_target(target):
 # Every check name, in report order. Header check names come from the
 # headers module itself so the list cannot drift from it.
 HEADER_CHECKS = [f.check for f in headers.run({})]
-ALL_CHECKS = (["http-status"] + HEADER_CHECKS
-              + ["cookies", "cors", "tls-certificate", "tls-protocols", "caa",
-                 "security-txt", "spf", "dmarc", "dkim", "https-redirect"])
+ALL_CHECKS = [
+    "http-status", *HEADER_CHECKS,
+    "cookies", "cors", "tls-certificate", "tls-protocols", "caa",
+    "security-txt", "spf", "dmarc", "dkim", "https-redirect",
+]
 
 
 def parse_check_names(value):
@@ -214,7 +216,7 @@ def main(argv=None):
     parser.add_argument("--insecure", action="store_true",
                         help="if a target's certificate is not trusted, still run the other checks without verification "
                              "(the certificate is reported as FAIL)")
-    parser.add_argument("--retries", type=int, default=1, choices=range(0, 6), metavar="N",
+    parser.add_argument("--retries", type=int, default=1, choices=range(6), metavar="N",
                         help="retry a target's first request up to N times after a timeout or dropped connection (default 1, max 5)")
     parser.add_argument("--fail-on", choices=("fail", "warn"), default="fail",
                         help="exit 1 on any FAIL (default), or with 'warn' on any WARN or FAIL")
@@ -322,7 +324,7 @@ def _scan_insecure(url, args, cert_finding):
         _INSECURE = False
     # check_tls verifies on its own and would repeat the same failure.
     others = [f for f in result["findings"] if f.check != "tls-certificate"]
-    result["findings"] = [cert_finding] + others
+    result["findings"] = [cert_finding, *others]
     result["note"] = "certificate not trusted; the other checks ran with --insecure (no certificate verification)"
     return result, max(code, 1)
 

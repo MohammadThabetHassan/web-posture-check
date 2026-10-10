@@ -6,7 +6,7 @@ return a Finding, so they can be tested without network access.
 
 from urllib.parse import urlsplit, urlunsplit
 
-from .findings import Finding, PASS, WARN, FAIL
+from .findings import FAIL, PASS, WARN, Finding
 
 
 def http_url_for(url):

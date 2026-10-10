@@ -1,7 +1,7 @@
 import unittest
 
 from webposture import score
-from webposture.findings import Finding, PASS, WARN, FAIL
+from webposture.findings import FAIL, PASS, WARN, Finding
 
 
 def findings(passes=0, warns=0, fails=0):
@@ -30,7 +30,7 @@ class ScoreTest(unittest.TestCase):
 
     def test_skipped_findings_are_not_scored(self):
         skipped = Finding("spf", WARN, 'skipped: install the optional DNS support')
-        self.assertEqual(score.compute(findings(passes=4) + [skipped]), (100, "A"))
+        self.assertEqual(score.compute([*findings(passes=4), skipped]), (100, "A"))
 
     def test_nothing_to_score(self):
         self.assertIsNone(score.compute([]))

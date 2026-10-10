@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from unittest import mock
 
 from webposture import cli, markdown
-from webposture.findings import Finding, PASS, WARN, FAIL
+from webposture.findings import FAIL, PASS, WARN, Finding
 
 WHEN = datetime(2026, 10, 10, 9, 30, tzinfo=timezone.utc)
 FINDINGS = [

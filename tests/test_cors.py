@@ -4,7 +4,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from webposture import cors
 from webposture.cli import probe_cors
-from webposture.findings import PASS, WARN, FAIL
+from webposture.findings import FAIL, PASS, WARN
 
 PROBE = cors.PROBE_ORIGIN
 

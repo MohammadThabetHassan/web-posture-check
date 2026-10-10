@@ -1,7 +1,7 @@
 import unittest
 
 from webposture import headers
-from webposture.findings import PASS, WARN, FAIL
+from webposture.findings import FAIL, PASS, WARN
 
 GOOD = {
     "Strict-Transport-Security": "max-age=31536000; includeSubDomains",

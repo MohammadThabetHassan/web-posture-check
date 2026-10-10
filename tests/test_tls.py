@@ -4,7 +4,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from webposture import tls
-from webposture.findings import PASS, WARN, FAIL
+from webposture.findings import FAIL, PASS, WARN
 
 NOW = datetime(2026, 10, 10, 12, 0, tzinfo=timezone.utc)
 

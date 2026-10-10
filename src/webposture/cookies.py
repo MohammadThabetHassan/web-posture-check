@@ -7,7 +7,7 @@ must not be folded into one) and returns a Finding. No network access.
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 
-from .findings import Finding, PASS, WARN, FAIL
+from .findings import FAIL, PASS, WARN, Finding
 
 _RANK = {PASS: 0, WARN: 1, FAIL: 2}
 
