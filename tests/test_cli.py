@@ -385,6 +385,24 @@ class InsecureTest(unittest.TestCase):
         # The certificate failure keeps the run failing even when every other check passes.
         self.assertEqual(code, 1)
 
+    def test_insecure_drops_the_duplicate_tls_certificate_finding(self):
+        # Under --insecure, check_tls verifies on its own and re-reports the
+        # same failure. When tls-certificate is among the checks, that duplicate
+        # must be dropped so the report shows the single prepended cert FAIL.
+        def fetch(url, timeout, extra_headers=None):
+            if cli._https_context() is None:
+                raise _cert_error(10, "certificate has expired")
+            return self.OK
+
+        duplicate = cli.Finding("tls-certificate", "FAIL", "certificate has expired")
+        out = io.StringIO()
+        with mock.patch.object(cli, "fetch_headers", side_effect=fetch), \
+                mock.patch.object(cli, "check_tls", return_value=duplicate), redirect_stdout(out):
+            cli.main(["bad-cert.example", "--only", "hsts,tls-certificate", "--insecure", "--json"])
+        checks = [f["check"] for f in json.loads(out.getvalue())["findings"]]
+        self.assertEqual(checks.count("tls-certificate"), 1)
+        self.assertEqual(checks, ["tls-certificate", "hsts"])
+
     def test_verification_is_switched_back_on_afterwards(self):
         self._run("--only", "hsts", "--insecure")
         self.assertFalse(cli._INSECURE)
