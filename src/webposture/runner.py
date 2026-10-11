@@ -209,7 +209,7 @@ def run_checks(url, fetched, args, context=None):
     ]
     # The status goes first: when it is an error page, every finding below describes that page.
     findings = [transport.check_status(status)] if wanted("http-status") else []
-    findings += [f for f in headers.run(response_headers) if wanted(f.check)]
+    findings += [f for f in headers.run(response_headers, https=final_url.startswith("https://")) if wanted(f.check)]
     findings += [run() for name, run in later if wanted(name)]
     return {"url": final_url, "status": status, "findings": findings, "note": None}, exit_code(findings, args.fail_on)
 

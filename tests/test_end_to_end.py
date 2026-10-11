@@ -4,7 +4,10 @@ Nothing inside the tool is mocked. Each test starts small HTTP servers on
 127.0.0.1 and runs cli.main on them, so the fetches, the CORS probe, the
 security.txt request, the checks and the output formats are exercised
 together. The DNS and TLS checks need real domains and HTTPS, so the runs
-select the checks that a local plain-HTTP server can answer.
+select the checks that a local plain-HTTP server can answer. HSTS is not one
+of them: browsers ignore it over plain HTTP, so it fails there by design
+(test_hsts_over_plain_http_fails). tests/test_https_end_to_end.py runs the
+same CLI against a local HTTPS server.
 """
 
 import io
@@ -17,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from webposture import cli
 
-LOCAL_CHECKS = "http-status,hsts,csp,x-content-type-options,clickjacking,cookies,cors,security-txt"
+LOCAL_CHECKS = "http-status,csp,x-content-type-options,clickjacking,cookies,cors,security-txt"
 
 
 def _security_txt():
@@ -109,7 +112,7 @@ class EndToEndTest(unittest.TestCase):
         code, out = self._run(self._serve(_BadSite), "--json")
         statuses = self._statuses(json.loads(out))
         self.assertEqual(statuses["http-status"], "PASS")
-        for check in ("hsts", "csp", "x-content-type-options", "clickjacking"):
+        for check in ("csp", "x-content-type-options", "clickjacking"):
             self.assertEqual(statuses[check], "FAIL", check)
         # Over plain HTTP a missing Secure flag is not a FAIL; HttpOnly and SameSite still warn.
         self.assertEqual(statuses["cookies"], "WARN")
@@ -138,7 +141,7 @@ class EndToEndTest(unittest.TestCase):
         code, out = self._run(self._serve(_ErrorSite), "--json")
         statuses = self._statuses(json.loads(out))
         self.assertEqual(statuses["http-status"], "WARN")
-        self.assertEqual(statuses["hsts"], "FAIL")  # the checks ran on the 503 response
+        self.assertEqual(statuses["csp"], "FAIL")  # the checks ran on the 503 response
         http_status = next(f for f in json.loads(out)["findings"] if f["check"] == "http-status")
         self.assertIn("bot protection", http_status["detail"])
         self.assertEqual(code, 1)
@@ -156,6 +159,16 @@ class EndToEndTest(unittest.TestCase):
         self.assertIn(f"{url} is served over plain HTTP", finding["detail"])
         self.assertEqual(code, 1)
 
+
+    def test_hsts_over_plain_http_fails(self):
+        # The good site sends a valid Strict-Transport-Security header, but over
+        # plain HTTP, where browsers ignore it (RFC 6797 section 8.1).
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = cli.main([self._serve(_GoodSite), "--only", "hsts", "--json", "--retries", "0", "--timeout", "5"])
+        finding = json.loads(out.getvalue())["findings"][0]
+        self.assertEqual((finding["status"], code), ("FAIL", 1))
+        self.assertIn("plain HTTP", finding["detail"])
 
 if __name__ == "__main__":
     unittest.main()

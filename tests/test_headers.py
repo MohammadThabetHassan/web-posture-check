@@ -2,6 +2,7 @@ import unittest
 
 from webposture import headers
 from webposture.findings import FAIL, PASS, WARN
+from webposture.headermap import HeaderMap
 
 GOOD = {
     "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
@@ -143,10 +144,12 @@ class HeaderChecksTest(unittest.TestCase):
         self.assertIn("'unsafe-eval'", f.detail)
         self.assertNotIn("https:", f.detail)
 
-    def test_csp_without_script_directives_says_scripts_unrestricted(self):
+    def test_csp_that_restricts_no_scripts_warns(self):
+        # A policy with neither script-src nor default-src lets any script run, so
+        # it is no protection against XSS; a PASS here would be a false pass.
         f = headers.check_csp({"Content-Security-Policy": "frame-ancestors 'none'"})
-        self.assertEqual(f.status, PASS)
-        self.assertIn("not restricted", f.detail)
+        self.assertEqual(f.status, WARN)
+        self.assertIn("does not restrict scripts", f.detail)
 
     def test_server_with_version_warns(self):
         for server in ("nginx/1.18.0", "Apache/2.4.41 (Ubuntu)", "Microsoft-IIS/10.0", "Apache/2"):
@@ -287,6 +290,190 @@ class HeaderChecksTest(unittest.TestCase):
     def test_unsafe_url_referrer_policy_fails(self):
         f = headers.check_referrer_policy({"Referrer-Policy": "unsafe-url"})
         self.assertEqual(f.status, FAIL)
+
+
+
+class HstsStandardTest(unittest.TestCase):
+    """RFC 6797: which header counts, what max-age=0 means, and plain HTTP."""
+
+    def test_only_the_first_header_counts(self):
+        # Section 8.1: browsers process only the first header, so a later weak one changes nothing.
+        f = headers.check_hsts(HeaderMap([("Strict-Transport-Security", "max-age=31536000; includeSubDomains"),
+                                          ("Strict-Transport-Security", "max-age=10")]))
+        self.assertEqual(f.status, PASS)
+        self.assertIn("first of 2 Strict-Transport-Security headers", f.detail)
+
+    def test_a_weak_first_header_is_not_rescued_by_a_later_one(self):
+        f = headers.check_hsts(HeaderMap([("Strict-Transport-Security", "max-age=10"),
+                                          ("Strict-Transport-Security", "max-age=31536000")]))
+        self.assertEqual(f.status, WARN)
+
+    def test_max_age_zero_fails(self):
+        # Section 6.1.1: max-age=0 tells browsers to forget the host, the same as no HSTS.
+        f = headers.check_hsts({"Strict-Transport-Security": "max-age=0"})
+        self.assertEqual(f.status, FAIL)
+        self.assertIn("stop enforcing HTTPS", f.detail)
+
+    def test_quoted_max_age_is_read(self):
+        self.assertEqual(headers.check_hsts({"Strict-Transport-Security": 'max-age="31536000"'}).status, PASS)
+
+    def test_non_numeric_max_age_fails(self):
+        for value in ("max-age=abc", "max-age=-5", "max-age", "max-age=1e9"):
+            self.assertEqual(headers.check_hsts({"Strict-Transport-Security": value}).status, FAIL, value)
+
+    def test_a_repeated_directive_makes_the_header_invalid(self):
+        f = headers.check_hsts({"Strict-Transport-Security": "max-age=31536000; max-age=10"})
+        self.assertEqual(f.status, FAIL)
+        self.assertIn("repeats a directive", f.detail)
+
+    def test_a_directive_name_is_not_matched_inside_another(self):
+        # The old regex found "max-age=" inside "xmax-age=", which is an unknown directive.
+        self.assertEqual(headers.check_hsts({"Strict-Transport-Security": "xmax-age=31536000"}).status, FAIL)
+
+    def test_hsts_on_plain_http_fails(self):
+        # Section 8.1: browsers ignore the header on a response that did not come over HTTPS.
+        f = headers.check_hsts({"Strict-Transport-Security": "max-age=31536000"}, https=False)
+        self.assertEqual(f.status, FAIL)
+        self.assertIn("plain HTTP", f.detail)
+        run = {f.check: f for f in headers.run({"Strict-Transport-Security": "max-age=31536000"}, https=False)}
+        self.assertEqual(run["hsts"].status, FAIL)
+
+
+class CspStandardTest(unittest.TestCase):
+    """CSP3: every header and every comma-separated policy is enforced."""
+
+    def test_empty_policy_fails(self):
+        for value in ("", "   ", ";", " , "):
+            f = headers.check_csp({"Content-Security-Policy": value})
+            self.assertEqual(f.status, FAIL, repr(value))
+            self.assertIn("empty", f.detail)
+
+    def test_a_second_header_that_restricts_scripts_is_enforced(self):
+        # Two headers: one restricts scripts, one sets frame-ancestors. Both apply.
+        f = headers.check_csp(HeaderMap([("Content-Security-Policy", "script-src 'self'"),
+                                         ("Content-Security-Policy", "frame-ancestors 'none'")]))
+        self.assertEqual(f.status, PASS)
+        self.assertIn("2 policies", f.detail)
+
+    def test_a_weakness_counts_only_when_every_policy_shares_it(self):
+        # 'unsafe-inline' is allowed by the first policy but blocked by the second, so inline scripts never run.
+        f = headers.check_csp(HeaderMap([("Content-Security-Policy", "script-src 'self' 'unsafe-inline'"),
+                                         ("Content-Security-Policy", "script-src 'self'")]))
+        self.assertEqual(f.status, PASS)
+
+    def test_a_weakness_every_policy_shares_is_reported(self):
+        f = headers.check_csp(HeaderMap([("Content-Security-Policy", "script-src 'unsafe-eval' https:"),
+                                         ("Content-Security-Policy", "default-src 'unsafe-eval' data:")]))
+        self.assertEqual(f.status, WARN)
+        self.assertIn("'unsafe-eval' in all 2 policies", f.detail)
+        self.assertNotIn("https:", f.detail)
+
+    def test_comma_separated_policies_in_one_header_are_each_enforced(self):
+        f = headers.check_csp({"Content-Security-Policy": "script-src 'unsafe-inline', script-src 'self'"})
+        self.assertEqual(f.status, PASS)
+
+    def test_strict_dynamic_switches_off_unsafe_inline(self):
+        # CSP3 section 6.7.3.3: 'strict-dynamic' disables 'unsafe-inline' for scripts, like a nonce or hash.
+        f = headers.check_csp({"Content-Security-Policy": "script-src 'strict-dynamic' 'unsafe-inline'"})
+        self.assertEqual(f.status, PASS)
+
+
+class FramingStandardTest(unittest.TestCase):
+    """The HTML standard's X-Frame-Options processing model, and CSP frame-ancestors."""
+
+    def test_frame_ancestors_that_allows_any_site_fails(self):
+        for value in ("*", "https:", "http: https:", "https://*", "*:443", "'self' *"):
+            f = headers.check_framing({"Content-Security-Policy": f"default-src 'self'; frame-ancestors {value}"})
+            self.assertEqual(f.status, FAIL, value)
+            self.assertIn("allows any site", f.detail)
+
+    def test_restrictive_frame_ancestors_pass(self):
+        for value in ("'none'", "'self'", "https://partner.example", "*.example.com", ""):
+            f = headers.check_framing({"Content-Security-Policy": f"frame-ancestors {value}"})
+            self.assertEqual(f.status, PASS, value)
+        self.assertIn("'none'", headers.check_framing({"Content-Security-Policy": "frame-ancestors"}).detail)
+
+    def test_frame_ancestors_overrides_x_frame_options(self):
+        # HTML: an enforced frame-ancestors makes browsers ignore X-Frame-Options, so DENY does not help.
+        f = headers.check_framing({"Content-Security-Policy": "frame-ancestors *", "X-Frame-Options": "DENY"})
+        self.assertEqual(f.status, FAIL)
+        self.assertIn("X-Frame-Options is ignored", f.detail)
+
+    def test_one_restrictive_policy_protects(self):
+        f = headers.check_framing(HeaderMap([("Content-Security-Policy", "frame-ancestors *"),
+                                             ("Content-Security-Policy", "frame-ancestors 'self'")]))
+        self.assertEqual(f.status, PASS)
+
+    def test_report_only_frame_ancestors_does_not_count(self):
+        f = headers.check_framing({"Content-Security-Policy-Report-Only": "frame-ancestors 'none'"})
+        self.assertEqual(f.status, FAIL)
+
+    def test_repeated_identical_x_frame_options_is_that_value(self):
+        # A proxy that adds the header again produces "SAMEORIGIN, SAMEORIGIN"; browsers read SAMEORIGIN.
+        for headers_in in ({"X-Frame-Options": "SAMEORIGIN, SAMEORIGIN"},
+                           HeaderMap([("X-Frame-Options", "SAMEORIGIN"), ("X-Frame-Options", "sameorigin")])):
+            f = headers.check_framing(headers_in)
+            self.assertEqual(f.status, PASS)
+            self.assertIn("SAMEORIGIN", f.detail)
+
+    def test_conflicting_x_frame_options_block_framing(self):
+        # HTML: several different values including deny, sameorigin or allowall block framing outright.
+        for value in ("DENY, SAMEORIGIN", "SAMEORIGIN, ALLOWALL"):
+            f = headers.check_framing({"X-Frame-Options": value})
+            self.assertEqual(f.status, PASS, value)
+            self.assertIn("treat as DENY", f.detail)
+
+    def test_unknown_x_frame_options_values_fail(self):
+        for value in ("ALLOWALL", "foo", "", "foo, bar"):
+            self.assertEqual(headers.check_framing({"X-Frame-Options": value}).status, FAIL, value)
+
+
+class ListedHeaderValuesTest(unittest.TestCase):
+    """Headers the Fetch standard reads by combining and splitting on commas."""
+
+    def test_nosniff_repeated_passes(self):
+        # Fetch, "determine nosniff": the first value decides.
+        for headers_in in ({"X-Content-Type-Options": "nosniff, nosniff"},
+                           HeaderMap([("X-Content-Type-Options", "nosniff"), ("X-Content-Type-Options", "nosniff")]),
+                           {"X-Content-Type-Options": "NoSniff"}):
+            f = headers.check_content_type_options(headers_in)
+            self.assertEqual(f.status, PASS)
+
+    def test_nosniff_must_come_first(self):
+        f = headers.check_content_type_options({"X-Content-Type-Options": "foo, nosniff"})
+        self.assertEqual(f.status, FAIL)
+
+    def test_referrer_policy_uses_the_last_recognised_value(self):
+        # Referrer Policy section 8.1: a list names fallbacks; the last recognised token applies.
+        f = headers.check_referrer_policy({"Referrer-Policy": "no-referrer, unsafe-url"})
+        self.assertEqual(f.status, FAIL)
+        f = headers.check_referrer_policy({"Referrer-Policy": "unsafe-url, strict-origin-when-cross-origin"})
+        self.assertEqual(f.status, PASS)
+        self.assertIn("strict-origin-when-cross-origin", f.detail)
+        f = headers.check_referrer_policy({"Referrer-Policy": "strict-origin-when-cross-origin, made-up-future-value"})
+        self.assertEqual(f.status, PASS)
+
+    def test_referrer_policy_across_repeated_headers(self):
+        f = headers.check_referrer_policy(HeaderMap([("Referrer-Policy", "no-referrer"), ("Referrer-Policy", "unsafe-url")]))
+        self.assertEqual(f.status, FAIL)
+
+    def test_referrer_policy_with_no_recognised_value_warns(self):
+        f = headers.check_referrer_policy({"Referrer-Policy": "nope"})
+        self.assertEqual(f.status, WARN)
+        self.assertIn("no recognised value", f.detail)
+
+    def test_no_referrer_when_downgrade_warns(self):
+        f = headers.check_referrer_policy({"Referrer-Policy": "no-referrer-when-downgrade"})
+        self.assertEqual(f.status, WARN)
+        self.assertIn("full URL", f.detail)
+
+    def test_empty_permissions_policy_warns(self):
+        self.assertEqual(headers.check_permissions_policy({"Permissions-Policy": " "}).status, WARN)
+
+    def test_every_server_header_is_checked(self):
+        f = headers.check_information_leakage(HeaderMap([("Server", "cloudflare"), ("Server", "nginx/1.25.3")]))
+        self.assertEqual(f.status, WARN)
+        self.assertIn("nginx/1.25.3", f.detail)
 
 
 if __name__ == "__main__":
