@@ -718,7 +718,9 @@ class TargetValidationTest(unittest.TestCase):
             " example.com:8443 ": "https://example.com:8443",
             "HTTP://example.com/x": "HTTP://example.com/x",
             "https://[2001:db8::1]:8443/": "https://[2001:db8::1]:8443/",
-            "bücher.example": "https://bücher.example",
+            # A Unicode host name is requested in its ASCII (IDNA) form, as browsers do.
+            "bücher.example": "https://xn--bcher-kva.example",
+            "https://Bücher.example:8443/pfad?q=ä": "https://xn--bcher-kva.example:8443/pfad?q=ä",
         }
         for target, url in cases.items():
             self.assertEqual(runner.normalise_target(target), url, target)

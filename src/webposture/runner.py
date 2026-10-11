@@ -15,7 +15,7 @@ from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 from . import caa, checks, cookies, cors, emailauth, fetch, headers, securitytxt, tls, transport
 from .findings import FAIL, SKIPPED_PREFIX, WARN, Finding, ScanResult
@@ -59,7 +59,9 @@ def normalise_target(target: str) -> str:
 
     A bare domain or host:port is fetched over https://. Only http:// and https://
     URLs with a valid host name and port are accepted; a URL with credentials in
-    it is refused, so they never end up in a request log or a report.
+    it is refused, so they never end up in a request log or a report. A host name
+    in Unicode (bücher.example) is requested in its ASCII form (xn--bcher-kva.example),
+    as browsers do: the request line and Host header cannot carry it otherwise.
     """
     target = target.strip()
     if not target:
@@ -79,9 +81,12 @@ def normalise_target(target: str) -> str:
     except ValueError:
         raise ValueError("its port is not a number from 0 to 65535") from None
     try:
-        parts.hostname.encode("idna")
+        ascii_host = parts.hostname.encode("idna").decode("ascii")
     except UnicodeError:
         raise ValueError(f"{parts.hostname} is not a valid host name") from None
+    if not parts.hostname.isascii():
+        netloc = ascii_host + (f":{parts.port}" if parts.port is not None else "")
+        url = urlunsplit(parts._replace(netloc=netloc))
     return url
 
 
