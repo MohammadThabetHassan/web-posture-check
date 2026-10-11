@@ -41,7 +41,7 @@ jobs:
         run: |
           echo "score=$SCORE grade=$GRADE exit-code=$CODE report=$REPORT"
           test "$SCORE" = "100" && test "$GRADE" = "A" && test "$CODE" = "0"
-          grep -qF 'Web posture report: `https://github.com/`' "$REPORT"
+          grep -qF 'Web posture report: `https://github.com`' "$REPORT"
       - name: Code scanning accepts the SARIF
         # Pull requests from forks get a read-only token, so they cannot upload.
         if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
