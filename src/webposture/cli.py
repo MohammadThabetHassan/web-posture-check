@@ -24,29 +24,8 @@ def parse_check_names(value):
     return names
 
 
-# One line per check for --list-checks, in report order.
-CHECK_SUMMARIES = {
-    "http-status": "the final response is not an error page (bot protection, 4xx, 5xx)",
-    "hsts": "Strict-Transport-Security max-age, includeSubDomains and preload",
-    "csp": "Content-Security-Policy is set and its script policy is not unsafe",
-    "x-content-type-options": "X-Content-Type-Options: nosniff",
-    "clickjacking": "CSP frame-ancestors or X-Frame-Options",
-    "referrer-policy": "Referrer-Policy is set and not unsafe-url",
-    "permissions-policy": "Permissions-Policy is set",
-    "cross-origin-isolation": "Cross-Origin-Opener, -Resource and -Embedder policies",
-    "x-xss-protection": "the legacy XSS auditor is not turned on",
-    "information-leakage": "no server version or stack headers",
-    "cookies": "Secure, HttpOnly, SameSite and __Host- / __Secure- prefixes",
-    "cors": "no credentialed access for any origin (probe request)",
-    "tls-certificate": "trusted and not close to expiry",
-    "tls-protocols": "TLS 1.0 and 1.1 are refused",
-    "caa": "a CAA record limits which CAs may issue",
-    "security-txt": "/.well-known/security.txt (RFC 9116)",
-    "spf": "a single SPF record that does not allow everyone",
-    "dmarc": "a DMARC policy that quarantines or rejects",
-    "dkim": "a DKIM key under common or given selectors",
-    "https-redirect": "plain HTTP redirects to HTTPS",
-}
+# Kept here too for callers that used cli.CHECK_SUMMARIES.
+CHECK_SUMMARIES = runner.CHECK_SUMMARIES
 
 
 def read_targets_file(path):
@@ -67,12 +46,18 @@ def build_parser():
     parser.add_argument("--targets-file", metavar="FILE",
                         help="read more targets from FILE, one per line (# starts a comment)")
     output_group = parser.add_mutually_exclusive_group()
-    output_group.add_argument("--format", choices=("text", "json", "markdown"), default="text",
-                              help="output format (default text); markdown is a table for tickets and pull requests")
+    output_group.add_argument("--format", choices=("text", "json", "markdown", "sarif"), default="text",
+                              help="output format (default text); markdown is a table for tickets and pull requests, "
+                                   "sarif is for GitHub code scanning")
     output_group.add_argument("--json", action="store_const", const="json", dest="format",
                               help="same as --format json")
     parser.add_argument("--output", metavar="FILE",
                         help="write the report to FILE (UTF-8) instead of printing it")
+    parser.add_argument("--sarif", metavar="FILE",
+                        help="also write a SARIF 2.1.0 log to FILE, from the same scan (for GitHub code scanning)")
+    parser.add_argument("--sarif-location", metavar="PATH",
+                        help="repository file every SARIF result points to, e.g. the workflow that runs the scan "
+                             "(default: a path made from the URL, such as example.com/login)")
     parser.add_argument("--list-checks", action="store_true", help="print every check name with a short description and exit")
     parser.add_argument("--timeout", type=float, default=10.0, help="request timeout in seconds (default 10)")
     parser.add_argument("--insecure", action="store_true",
@@ -95,13 +80,25 @@ def build_parser():
     return parser
 
 
+def write_file(path, text, option):
+    """Write text to path as UTF-8; on failure print why and return False."""
+    try:
+        # UTF-8 whatever the console encoding is (Windows consoles are often not UTF-8).
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+    except OSError as err:
+        print(f"error: could not write {option}: {err}", file=sys.stderr)
+        return False
+    return True
+
+
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
 
     if args.list_checks:
         width = max(len(name) for name in runner.ALL_CHECKS)
-        print("\n".join(f"{name.ljust(width)}  {CHECK_SUMMARIES[name]}" for name in runner.ALL_CHECKS))
+        print("\n".join(f"{name.ljust(width)}  {runner.CHECK_SUMMARIES[name]}" for name in runner.ALL_CHECKS))
         return 0
 
     targets = list(args.targets)
@@ -116,21 +113,19 @@ def main(argv=None):
     # map() returns the outcomes in input order, however the scans finish.
     with ThreadPoolExecutor(max_workers=min(args.jobs, len(targets))) as pool:
         outcomes = list(pool.map(lambda target: runner.scan(target, args), targets))
-    results, codes = [], []
+    results, codes, errors = [], [], []
     for result, code, error in outcomes:
         codes.append(code)
         if error:
+            errors.append(error)
             print(f"error: {error}", file=sys.stderr)
         if result is not None:
             results.append(result)
-    text = output.render(args.format, results, single=len(targets) == 1)
+    text = output.render(args.format, results, single=len(targets) == 1, errors=errors, sarif_anchor=args.sarif_location)
+    if args.sarif and not write_file(args.sarif, output.to_sarif(results, errors, args.sarif_location), "--sarif"):
+        return 2
     if args.output:
-        try:
-            # Written as UTF-8 whatever the console encoding is (Windows consoles are often not UTF-8).
-            with open(args.output, "w", encoding="utf-8", newline="\n") as handle:
-                handle.write(text)
-        except OSError as err:
-            print(f"error: could not write --output: {err}", file=sys.stderr)
+        if not write_file(args.output, text, "--output"):
             return 2
     else:
         sys.stdout.write(text)
