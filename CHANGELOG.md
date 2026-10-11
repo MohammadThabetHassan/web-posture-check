@@ -4,6 +4,12 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.4.0] - 2026-10-11
+
+Findings in GitHub code scanning, browser-accurate parsing, and the quality gates behind it. Built by Mohammad Thabet and Omar Alraas.
+
 ### Added
 
 - SARIF 2.1.0 output for GitHub code scanning: `--format sarif`, and `--sarif FILE` to write a SARIF log next to the normal report from the same scan. FAIL is an error, WARN a warning; alerts keep one identity per check and URL across runs. `--sarif-location PATH` points every result at a repository file.
@@ -136,7 +142,8 @@ First release published to PyPI. Every change below was a pull request co-author
 
 - Initial release: HTTP security header checks with text and JSON output.
 
-[Unreleased]: https://github.com/MohammadThabetHassan/web-posture-check/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/MohammadThabetHassan/web-posture-check/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/MohammadThabetHassan/web-posture-check/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/MohammadThabetHassan/web-posture-check/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/MohammadThabetHassan/web-posture-check/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/MohammadThabetHassan/web-posture-check/tree/v0.1.0

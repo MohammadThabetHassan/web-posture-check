@@ -183,7 +183,7 @@ If nothing answers on plain HTTP at all, `https-redirect` passes, since nothing 
 ```markdown
 ## Web posture report: `https://example.com`
 
-HTTP 200, generated 2026-10-10 15:50 UTC by web-posture-check 0.3.0
+HTTP 200, generated 2026-10-10 15:50 UTC by web-posture-check 0.4.0
 
 **Grade F** (40/100): **3 FAIL**, **0 WARN**, 2 PASS
 
@@ -223,7 +223,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - id: posture
-        uses: MohammadThabetHassan/web-posture-check@v0.3.0
+        uses: MohammadThabetHassan/web-posture-check@v0.4.0
         with:
           targets: |
             example.com
@@ -313,7 +313,7 @@ Version 0.x, but scripts and pipelines can rely on these. A change to any of the
 - **Statuses** `PASS`, `WARN` and `FAIL`, and that a skipped check starts its detail with `skipped:`.
 - **Action inputs and outputs**: the inputs `targets`, `args`, `dns` and `python-version`, and the outputs `score`, `grade`, `exit-code`, `report` and `sarif`.
 
-The detail text, the text and Markdown layouts and the exact score of a site can change in any release: a check that becomes more accurate can change a result. Pin a version (`web-posture-check==0.3.0`, or the action at a release SHA) for fully repeatable results.
+The detail text, the text and Markdown layouts and the exact score of a site can change in any release: a check that becomes more accurate can change a result. Pin a version (`web-posture-check==0.4.0`, or the action at a release SHA) for fully repeatable results.
 
 ## Development
 
@@ -349,7 +349,7 @@ Every action in the workflows is pinned to a commit SHA, no checkout keeps the j
 
 ## Releases
 
-Changes are listed in [CHANGELOG.md](CHANGELOG.md). Pushing a tag such as `v0.3.0` runs [`release.yml`](.github/workflows/release.yml): it checks the tag matches the package version, runs the test suite, builds and checks the package, and publishes it to PyPI with Trusted Publishing, so no PyPI token exists anywhere. Every published file carries a PyPI attestation linking it to that workflow.
+Changes are listed in [CHANGELOG.md](CHANGELOG.md). Pushing a tag such as `v0.4.0` runs [`release.yml`](.github/workflows/release.yml): it checks the tag matches the package version, runs the test suite, builds and checks the package, and publishes it to PyPI with Trusted Publishing, so no PyPI token exists anywhere. Every published file carries a PyPI attestation linking it to that workflow.
 
 ## Contributing and security
 
