@@ -184,5 +184,12 @@ class DmarcSubdomainPolicyTest(unittest.TestCase):
         self.assertEqual(f.status, WARN)
         self.assertIn("not a valid policy", f.detail)
 
+    def test_invalid_sp_spoils_the_record_for_the_domain_itself_too(self):
+        # Section 6.6.3 step 6 applies to the whole record, not only to subdomains.
+        for domain in ("example.com", None):
+            f = emailauth.check_dmarc("example.com", ["v=DMARC1; p=reject; sp=bogus"], domain=domain)
+            self.assertEqual(f.status, WARN, domain)
+            self.assertIn("sp='bogus' is not a valid policy, so receivers treat the record as p=none", f.detail)
+
 if __name__ == "__main__":
     unittest.main()

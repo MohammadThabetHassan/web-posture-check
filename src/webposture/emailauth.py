@@ -110,12 +110,14 @@ def check_dmarc(found_on: str | None, txt_strings: Iterable[str], domain: str | 
     tag = "sp" if inherited and "sp" in tags else "p"
     applies = f" (the policy {domain} inherits as a subdomain)" if inherited else ""
     policy = tags.get(tag, "").lower()
+    policies = ("none", "quarantine", "reject")
     problems = []
-    if tag == "sp" and policy not in ("none", "quarantine", "reject"):
-        # Section 6.6.3: a record whose sp= is invalid is handled as if it said p=none.
-        problems.append(f"sp={tags.get('sp', '')!r} is not a valid policy, so receivers treat the record as p=none")
-    elif policy not in ("none", "quarantine", "reject"):
+    # Section 6.6.3, step 6: a record without a valid p=, or with an invalid sp=,
+    # is handled as if it said p=none, whichever domain it applies to.
+    if tags.get("p", "").lower() not in policies:
         problems.append(f"no valid p= tag ('{tags.get('p', '')}'), so receivers treat it as p=none")
+    elif "sp" in tags and tags["sp"].lower() not in policies:
+        problems.append(f"sp={tags['sp']!r} is not a valid policy, so receivers treat the record as p=none")
     elif policy == "none":
         problems.append(f"{tag}=none{applies} only monitors; spoofed mail is still delivered")
     pct = tags.get("pct")
