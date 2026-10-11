@@ -97,6 +97,11 @@ class ArtifactUriTest(unittest.TestCase):
     def test_query_and_fragment_are_dropped(self):
         self.assertEqual(sarif.artifact_uri("https://example.com/a?token=x#top"), "example.com/a")
 
+    def test_anchor_path_becomes_a_relative_uri(self):
+        self.assertEqual(sarif.anchor_uri(".github/workflows/scan.yml"), ".github/workflows/scan.yml")
+        self.assertEqual(sarif.anchor_uri("./.github/workflows/web scan.yml"), ".github/workflows/web%20scan.yml")
+        self.assertEqual(sarif.anchor_uri(".github\\workflows\\100%.yml"), ".github/workflows/100%25.yml")
+
     def test_unsafe_characters_are_percent_encoded(self):
         self.assertEqual(sarif.artifact_uri("https://example.com/a b"), "example.com/a%20b")
 
@@ -145,14 +150,38 @@ class SarifCliTest(unittest.TestCase):
         self.assertIn("example.com", invocation["toolExecutionNotifications"][0]["message"]["text"])
         self.assertEqual(code, 2)
 
-    def test_unwritable_sarif_exits_2(self):
-        err = io.StringIO()
+    def test_unwritable_sarif_exits_2_and_the_report_is_still_printed(self):
+        err, out = io.StringIO(), io.StringIO()
         with tempfile.TemporaryDirectory() as folder, \
                 mock.patch.object(fetch, "fetch_headers", return_value=("https://example.com/", {}, [], 200)), \
-                redirect_stdout(io.StringIO()), mock.patch("sys.stderr", err):
+                redirect_stdout(out), mock.patch("sys.stderr", err):
             code = cli.main(["example.com", "--only", "hsts", "--sarif", os.path.join(folder, "missing", "x.sarif")])
         self.assertEqual(code, 2)
         self.assertIn("could not write --sarif", err.getvalue())
+        self.assertIn("[FAIL] hsts", out.getvalue())
+
+    def test_unwritable_output_still_writes_the_sarif(self):
+        with tempfile.TemporaryDirectory() as folder, \
+                mock.patch.object(fetch, "fetch_headers", return_value=("https://example.com/", {}, [], 200)), \
+                redirect_stdout(io.StringIO()), mock.patch("sys.stderr", io.StringIO()) as err:
+            sarif_path = os.path.join(folder, "x.sarif")
+            code = cli.main(["example.com", "--only", "hsts", "--output", os.path.join(folder, "missing", "r.md"),
+                             "--sarif", sarif_path])
+            with open(sarif_path, encoding="utf-8") as handle:
+                self.assertEqual(json.load(handle)["runs"][0]["results"][0]["ruleId"], "hsts")
+        self.assertEqual(code, 2)
+        self.assertIn("could not write --output", err.getvalue())
+
+    def test_sarif_location_without_sarif_output_is_a_usage_error(self):
+        err = io.StringIO()
+        with mock.patch("sys.stderr", err), self.assertRaises(SystemExit) as ctx:
+            cli.main(["example.com", "--sarif-location", ".github/workflows/scan.yml"])
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertIn("--sarif-location only applies to SARIF output", err.getvalue())
+        # With --format sarif it is accepted.
+        _, out = self._main("--format", "sarif", "--sarif-location", ".github/workflows/scan.yml")
+        location = json.loads(out)["runs"][0]["results"][0]["locations"][0]["physicalLocation"]
+        self.assertEqual(location["artifactLocation"]["uri"], ".github/workflows/scan.yml")
 
 
 if __name__ == "__main__":

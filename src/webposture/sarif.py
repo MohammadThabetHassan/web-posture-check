@@ -20,6 +20,7 @@ I/O, so it can be tested directly.
 """
 
 import hashlib
+import posixpath
 from typing import Any
 from urllib.parse import quote, urlsplit
 
@@ -59,8 +60,17 @@ def artifact_uri(url):
     return quote(host + path, safe="/%-._~!$&'()*+,;=@")
 
 
+def anchor_uri(path):
+    """A repository file path as a relative URI: / separators, no ./ segments, percent-encoded.
+
+    --sarif-location takes a path, not a URI, so a space or a % in it is
+    encoded, and Windows separators become / as in every repository path.
+    """
+    return quote(posixpath.normpath(path.replace("\\", "/")), safe="/-._~!$&'()*+,;=@")
+
+
 def _location(url, anchor):
-    physical = {"artifactLocation": {"uri": anchor}, "region": {"startLine": 1}} if anchor \
+    physical = {"artifactLocation": {"uri": anchor_uri(anchor)}, "region": {"startLine": 1}} if anchor \
         else {"artifactLocation": {"uri": artifact_uri(url)}}
     return {"physicalLocation": physical, "logicalLocations": [{"fullyQualifiedName": url, "kind": "resource"}]}
 

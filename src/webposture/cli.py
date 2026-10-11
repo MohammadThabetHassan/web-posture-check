@@ -131,7 +131,10 @@ def display_url(target):
 
 
 def write_stdout(text):
-    """Print the report; if the reader has gone (e.g. piped into head), stop quietly instead of a traceback."""
+    """Print the report; if the reader has gone (e.g. piped into head), stop quietly instead of a traceback.
+
+    Returns True: a reader that stops early (head) has what it asked for.
+    """
     try:
         sys.stdout.write(text)
         sys.stdout.flush()
@@ -140,6 +143,7 @@ def write_stdout(text):
         devnull = os.open(os.devnull, os.O_WRONLY)
         os.dup2(devnull, sys.stdout.fileno())
         os.close(devnull)
+    return True
 
 
 def exit_now(code):
@@ -152,6 +156,8 @@ def exit_now(code):
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.sarif_location and not (args.sarif or args.format == "sarif"):
+        parser.error("--sarif-location only applies to SARIF output: add --sarif FILE or --format sarif")
 
     if args.list_checks:
         width = max(len(name) for name in runner.ALL_CHECKS)
@@ -188,15 +194,13 @@ def main(argv=None):
             result = output.failed(display_url(target), error) if result is None else {**result, "error": error}
         results.append(result)
     text = output.render(args.format, results, single=len(targets) == 1, errors=errors, sarif_anchor=args.sarif_location)
-    if args.sarif and not write_file(args.sarif, output.to_sarif(results, errors, args.sarif_location), "--sarif"):
-        return 2
-    if args.output:
-        if not write_file(args.output, text, "--output"):
-            return 2
-    else:
-        write_stdout(text)
-    # The worst outcome wins: 2 (a target could not be reached) over 1 (a FAIL) over 0.
-    return max(codes)
+    # The report comes first, and each output is attempted even if the other failed.
+    written = write_file(args.output, text, "--output") if args.output else write_stdout(text)
+    if args.sarif:
+        written = write_file(args.sarif, output.to_sarif(results, errors, args.sarif_location), "--sarif") and written
+    # The worst outcome wins: 2 (a target could not be scanned, or a report could
+    # not be written) over 1 (a FAIL) over 0.
+    return max(codes) if written else 2
 
 
 if __name__ == "__main__":
