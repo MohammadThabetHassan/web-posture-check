@@ -106,6 +106,21 @@ class BrowserCasesTest(unittest.TestCase):
         for name in ("b.co.uk", "www.ck", "b.zzunknowntld", "example.com", "x.github.io", "CO.UK.example.com"):
             self.assertFalse(publicsuffix.is_public_suffix(name), name)
 
+    def test_wildcard_parents_and_names_below(self):
+        # Chromium, Firefox and libpsl count the name under a wildcard rule as a suffix.
+        self.assertTrue(publicsuffix.is_public_suffix("kawasaki.jp"))
+        self.assertTrue(publicsuffix.has_suffix_below("amazonaws.com"))
+        self.assertFalse(publicsuffix.has_suffix_below("salesforce.com"))
+        self.assertFalse(publicsuffix.has_suffix_below("example.com"))
+
+    def test_a_huge_name_is_cheap(self):
+        # A hostile 64 KB header value must not burn CPU: only the last labels are looked at.
+        import time
+        name = ".".join(["a"] * 32000) + ".com"
+        start = time.perf_counter()
+        self.assertEqual(publicsuffix.public_suffix(name), "com")
+        self.assertLess(time.perf_counter() - start, 1.0)
+
     def test_suffixes_and_registrable_domains(self):
         self.assertEqual(publicsuffix.public_suffix("a.b.co.uk"), "co.uk")
         self.assertEqual(publicsuffix.public_suffix("www.ck"), "ck")  # the exception rule !www.ck

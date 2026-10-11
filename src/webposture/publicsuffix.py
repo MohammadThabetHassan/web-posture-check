@@ -26,29 +26,47 @@ def to_ascii(name: str) -> str:
         return name
 
 
-@functools.lru_cache(maxsize=1)
-def _rules() -> tuple[frozenset[str], frozenset[str], frozenset[str]]:
-    """The list's rules as (normal, wildcard, exception) sets, each in ASCII.
+class _Rules:
+    """The list's rules, each in ASCII.
 
-    A wildcard rule "*.ck" is stored as "ck" and an exception rule "!www.ck" as "www.ck".
+    A wildcard rule "*.ck" is kept as "ck" in wildcard and an exception rule
+    "!www.ck" as "www.ck" in exception. The name under a wildcard rule ("ck",
+    "kawasaki.jp") also counts as a public suffix, as Chromium, Firefox and
+    libpsl treat it, so it is in normal too.
     """
-    text = resources.files(__package__).joinpath("public_suffix_list.dat").read_text(encoding="utf-8")
-    normal: set[str] = set()
-    wildcard: set[str] = set()
-    exception: set[str] = set()
-    for line in text.splitlines():
-        # A rule is the first word of a line; "//" starts a comment.
-        words = line.split()
-        if not words or words[0].startswith("//"):
-            continue
-        rule = words[0]
-        if rule.startswith("!"):
-            exception.add(to_ascii(rule[1:]))
-        elif rule.startswith("*."):
-            wildcard.add(to_ascii(rule[2:]))
-        else:
-            normal.add(to_ascii(rule))
-    return frozenset(normal), frozenset(wildcard), frozenset(exception)
+
+    def __init__(self, text: str) -> None:
+        normal: set[str] = set()
+        wildcard: set[str] = set()
+        exception: set[str] = set()
+        for line in text.splitlines():
+            # A rule is the first word of a line; "//" starts a comment.
+            words = line.split()
+            if not words or words[0].startswith("//"):
+                continue
+            rule = words[0]
+            if rule.startswith("!"):
+                exception.add(to_ascii(rule[1:]))
+            elif rule.startswith("*."):
+                wildcard.add(to_ascii(rule[2:]))
+                normal.add(to_ascii(rule[2:]))
+            else:
+                normal.add(to_ascii(rule))
+        self.normal = frozenset(normal)
+        self.wildcard = frozenset(wildcard)
+        self.exception = frozenset(exception)
+        # The most labels a rule can match (a wildcard rule matches one more than it is
+        # written with); a longer name only has its last labels looked at.
+        self.max_labels = max(rule.count(".") + 1 for rule in normal | exception) + 1
+        # Names with a public suffix at most two labels below them (amazonaws.com, for
+        # s3.amazonaws.com): hosts that others can register under them.
+        self.shallow_parents = frozenset(
+            ".".join(labels[k:]) for labels in (rule.split(".") for rule in normal) for k in (1, 2) if k < len(labels))
+
+
+@functools.lru_cache(maxsize=1)
+def _rules() -> _Rules:
+    return _Rules(resources.files(__package__).joinpath("public_suffix_list.dat").read_text(encoding="utf-8"))
 
 
 def public_suffix(name: str) -> str:
@@ -57,17 +75,24 @@ def public_suffix(name: str) -> str:
     An exception rule wins; otherwise the matching rule with the most labels;
     otherwise the implicit rule "*", which makes the last label the suffix.
     """
-    labels = to_ascii(name).rstrip(".").split(".")
-    normal, wildcard, exception = _rules()
+    rules = _rules()
+    labels = to_ascii(name).rstrip(".").split(".")[-rules.max_labels:]
     for i in range(len(labels)):
-        if ".".join(labels[i:]) in exception:
+        if ".".join(labels[i:]) in rules.exception:
             return ".".join(labels[i + 1:])
     # From the longest candidate down, so the first match is the longest rule.
     for i in range(len(labels)):
         candidate = ".".join(labels[i:])
-        if candidate in normal or ".".join(labels[i + 1:]) in wildcard:
+        if candidate in rules.normal or ".".join(labels[i + 1:]) in rules.wildcard:
             return candidate
     return labels[-1]
+
+
+def has_suffix_below(name: str) -> bool:
+    """True when a public suffix lies at most two labels below name (s3.amazonaws.com below
+    amazonaws.com), so that hosts others can register end in name. Deeper rules belong to
+    narrow services, such as a vendor's staging environment."""
+    return to_ascii(name).rstrip(".") in _rules().shallow_parents
 
 
 def is_public_suffix(name: str) -> bool:
