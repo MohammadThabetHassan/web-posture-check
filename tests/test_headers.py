@@ -1,6 +1,6 @@
 import unittest
 
-from webposture import headers
+from webposture import checks, headers
 from webposture.findings import FAIL, PASS, WARN
 from webposture.headermap import HeaderMap
 
@@ -291,6 +291,13 @@ class HeaderChecksTest(unittest.TestCase):
         f = headers.check_referrer_policy({"Referrer-Policy": "unsafe-url"})
         self.assertEqual(f.status, FAIL)
 
+
+
+class CatalogTest(unittest.TestCase):
+    def test_every_header_check_is_in_the_catalog_in_report_order(self):
+        names = [finding.check for finding in headers.run(HeaderMap())]
+        self.assertEqual(len(names), len(set(names)))
+        self.assertEqual([name for name in checks.NAMES if name in names], names)
 
 
 class HstsStandardTest(unittest.TestCase):

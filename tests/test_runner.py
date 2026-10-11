@@ -79,9 +79,9 @@ class DnsLookupTest(unittest.TestCase):
 
 class InsecureFetchFailureTest(unittest.TestCase):
     def test_target_that_fails_even_unverified_keeps_the_certificate_finding(self):
-        args = cli.build_parser().parse_args(["bad-cert.example", "--insecure", "--retries", "0"])
+        options = runner.ScanOptions(insecure=True, retries=0)
         with mock.patch.object(fetch, "fetch_with_retries", side_effect=[_cert_error(), urllib.error.URLError("refused")]):
-            result, code, error = runner.scan("bad-cert.example", args)
+            result, code, error = runner.scan("bad-cert.example", options)
         # Nothing could be fetched, so the target was not scanned: exit 2, as for any unreachable target.
         self.assertEqual(code, 2)
         self.assertEqual([(f.check, f.status) for f in result["findings"]], [("tls-certificate", FAIL)])

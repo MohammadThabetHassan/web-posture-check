@@ -10,7 +10,7 @@ import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
-from . import __version__, output, runner
+from . import __version__, checks, output, runner
 from .textsafe import printable
 
 # More than this many simultaneous scans gains little and looks like a flood to the sites.
@@ -20,15 +20,15 @@ MAX_JOBS = 16
 def parse_check_names(value):
     """argparse type for --only/--skip: comma-separated check names, validated."""
     names = [n.strip() for n in value.split(",") if n.strip()]
-    unknown = [n for n in names if n not in runner.ALL_CHECKS]
+    unknown = [n for n in names if n not in checks.NAMES]
     if unknown or not names:
         problem = f"unknown check name(s): {', '.join(unknown)}" if unknown else "no check names given"
-        raise argparse.ArgumentTypeError(f"{problem}; valid names: {', '.join(runner.ALL_CHECKS)}")
+        raise argparse.ArgumentTypeError(f"{problem}; valid names: {', '.join(checks.NAMES)}")
     return names
 
 
 # Kept here too for callers that used cli.CHECK_SUMMARIES.
-CHECK_SUMMARIES = runner.CHECK_SUMMARIES
+CHECK_SUMMARIES = checks.SUMMARIES
 
 
 ISSUES_URL = "https://github.com/MohammadThabetHassan/web-posture-check/issues"
@@ -110,14 +110,27 @@ def write_file(path, text, option):
     return True
 
 
-def scan_safely(target, args):
+def scan_options(args):
+    """The scan settings from the parsed command line."""
+    return runner.ScanOptions(
+        timeout=args.timeout,
+        retries=args.retries,
+        insecure=args.insecure,
+        only=frozenset(args.only) if args.only is not None else None,
+        skip=frozenset(args.skip) if args.skip is not None else None,
+        fail_on=args.fail_on,
+        dkim_selectors=tuple(args.dkim_selector or ()),
+    )
+
+
+def scan_safely(target, options):
     """runner.scan, but a bug while scanning one target becomes that target's error, exit code 2.
 
     Without this, an unexpected exception in one thread would abort every other
     target's report and print a traceback.
     """
     try:
-        return runner.scan(target, args)
+        return runner.scan(target, options)
     except Exception as err:
         return None, 2, f"unexpected error while scanning {target!r}: {type(err).__name__}: {err} (please report it at {ISSUES_URL})"
 
@@ -160,8 +173,8 @@ def main(argv=None):
         parser.error("--sarif-location only applies to SARIF output: add --sarif FILE or --format sarif")
 
     if args.list_checks:
-        width = max(len(name) for name in runner.ALL_CHECKS)
-        print("\n".join(f"{name.ljust(width)}  {runner.CHECK_SUMMARIES[name]}" for name in runner.ALL_CHECKS))
+        width = max(len(check.name) for check in checks.CATALOG)
+        print("\n".join(f"{check.name.ljust(width)}  {check.summary}" for check in checks.CATALOG))
         return 0
 
     targets = list(args.targets)
@@ -174,9 +187,10 @@ def main(argv=None):
         parser.error("give at least one target, or --targets-file")
 
     # map() returns the outcomes in input order, however the scans finish.
+    options = scan_options(args)
     pool = ThreadPoolExecutor(max_workers=min(args.jobs, len(targets)))
     try:
-        outcomes = list(pool.map(lambda target: scan_safely(target, args), targets))
+        outcomes = list(pool.map(lambda target: scan_safely(target, options), targets))
     except KeyboardInterrupt:
         # Running scans cannot be stopped, and waiting for them could take
         # minutes, so leave at once with the conventional code for Ctrl-C.

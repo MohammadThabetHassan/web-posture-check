@@ -734,7 +734,7 @@ class RobustnessTest(unittest.TestCase):
 
     def test_an_unexpected_exception_is_one_targets_error(self):
         with mock.patch.object(runner, "scan", side_effect=RuntimeError("boom")):
-            result, code, error = cli.scan_safely("example.com", None)
+            result, code, error = cli.scan_safely("example.com", runner.ScanOptions())
         self.assertEqual((result, code), (None, 2))
         self.assertIn("unexpected error while scanning 'example.com': RuntimeError: boom", error)
         self.assertIn("issues", error)
@@ -752,6 +752,18 @@ class RobustnessTest(unittest.TestCase):
             with self.assertRaises(SystemExit, msg=value), mock.patch("sys.stderr", io.StringIO()):
                 cli.main(["example.com", "--timeout", value])
         self.assertEqual(cli.build_parser().parse_args(["x", "--timeout", "2.5"]).timeout, 2.5)
+
+    def test_scan_options_come_from_the_command_line(self):
+        args = cli.build_parser().parse_args(["x", "--timeout", "3", "--retries", "0", "--insecure", "--fail-on", "warn",
+                                              "--only", "hsts,dkim", "--dkim-selector", "s1", "--dkim-selector", "s2"])
+        self.assertEqual(cli.scan_options(args), runner.ScanOptions(
+            timeout=3.0, retries=0, insecure=True, only=frozenset({"hsts", "dkim"}), skip=None, fail_on="warn",
+            dkim_selectors=("s1", "s2")))
+        defaults = cli.scan_options(cli.build_parser().parse_args(["x"]))
+        self.assertEqual(defaults, runner.ScanOptions())
+        self.assertTrue(defaults.wanted("hsts"))
+        skipping = cli.scan_options(cli.build_parser().parse_args(["x", "--skip", "hsts"]))
+        self.assertEqual((skipping.wanted("hsts"), skipping.wanted("csp")), (False, True))
 
     def test_ctrl_c_exits_130_without_waiting(self):
         err = io.StringIO()

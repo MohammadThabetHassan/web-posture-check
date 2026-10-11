@@ -7,47 +7,47 @@ Requests go through the fetch module by attribute (fetch.fetch_headers, ...),
 so a test that patches the fetch module intercepts every caller.
 """
 
+from __future__ import annotations
+
 import ipaddress
 import ssl
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Literal
 from urllib.parse import urlsplit
 
-from . import caa, cookies, cors, emailauth, fetch, headers, securitytxt, tls, transport
+from . import caa, checks, cookies, cors, emailauth, fetch, headers, securitytxt, tls, transport
 from .findings import FAIL, SKIPPED_PREFIX, WARN, Finding
 from .headermap import HeaderMap
 
-# Every check name, in report order. Header check names come from the
-# headers module itself so the list cannot drift from it.
-HEADER_CHECKS = [f.check for f in headers.run({})]
-ALL_CHECKS = [
-    "http-status", *HEADER_CHECKS,
-    "cookies", "cors", "tls-certificate", "tls-protocols", "caa",
-    "security-txt", "spf", "dmarc", "dkim", "https-redirect",
-]
+# Every check name in report order, and each one's summary (kept here for
+# callers that used runner.ALL_CHECKS and runner.CHECK_SUMMARIES).
+ALL_CHECKS = list(checks.NAMES)
+CHECK_SUMMARIES = checks.SUMMARIES
 
-# One line per check, in report order: --list-checks and the SARIF rules.
-CHECK_SUMMARIES = {
-    "http-status": "the final response is not an error page (bot protection, 4xx, 5xx)",
-    "hsts": "Strict-Transport-Security max-age, includeSubDomains and preload",
-    "csp": "Content-Security-Policy is set and its script policy is not unsafe",
-    "x-content-type-options": "X-Content-Type-Options: nosniff",
-    "clickjacking": "CSP frame-ancestors or X-Frame-Options",
-    "referrer-policy": "Referrer-Policy is set and not unsafe-url",
-    "permissions-policy": "Permissions-Policy is set",
-    "cross-origin-isolation": "Cross-Origin-Opener, -Resource and -Embedder policies",
-    "x-xss-protection": "the legacy XSS auditor is not turned on",
-    "information-leakage": "no server version or stack headers",
-    "cookies": "Secure, HttpOnly, SameSite and __Host- / __Secure- prefixes",
-    "cors": "no credentialed access for any origin (probe request)",
-    "tls-certificate": "trusted and not close to expiry",
-    "tls-protocols": "TLS 1.0 and 1.1 are refused",
-    "caa": "a CAA record limits which CAs may issue",
-    "security-txt": "/.well-known/security.txt (RFC 9116)",
-    "spf": "a single SPF record that does not allow everyone",
-    "dmarc": "a DMARC policy that quarantines or rejects",
-    "dkim": "a DKIM key under common or given selectors",
-    "https-redirect": "plain HTTP redirects to HTTPS",
-}
+
+@dataclass(frozen=True)
+class ScanOptions:
+    """How to scan each target. The command line builds it (cli.scan_options)."""
+
+    timeout: float = 10.0
+    # Extra attempts for the first request after a timeout or a dropped connection.
+    retries: int = 1
+    # Run the other checks without certificate verification when the certificate is not trusted.
+    insecure: bool = False
+    # Check names to run (only) or to leave out (skip); None means no restriction.
+    only: frozenset[str] | None = None
+    skip: frozenset[str] | None = None
+    # The lowest status that makes the exit code 1.
+    fail_on: Literal["fail", "warn"] = "fail"
+    # DKIM selectors to look up; empty means the common ones.
+    dkim_selectors: tuple[str, ...] = ()
+
+    def wanted(self, name: str) -> bool:
+        """Whether check name is selected by only and skip."""
+        if self.only is not None:
+            return name in self.only
+        return self.skip is None or name not in self.skip
 
 
 def normalise_target(target):
@@ -192,7 +192,7 @@ def check_caa(url, timeout):
     return caa.check_caa(found_on, records)
 
 
-def scan(target, args):
+def scan(target, options):
     """Run the selected checks on one target.
 
     Returns (result or None, exit code, error message or None). The error is
@@ -204,22 +204,22 @@ def scan(target, args):
     except ValueError as err:
         return None, 2, f"invalid target {target!r}: {err}"
     try:
-        fetched = fetch.fetch_with_retries(url, args.timeout, args.retries)
+        fetched = fetch.fetch_with_retries(url, options.timeout, options.retries)
     except fetch.FETCH_ERRORS as err:
         reason = getattr(err, "reason", err)
         if isinstance(reason, ssl.SSLCertVerificationError):
             # A broken certificate is itself the most important finding, so
             # report it instead of aborting.
             finding = tls.check_certificate(None, reason.verify_code, reason.verify_message, now=datetime.now(timezone.utc))
-            if args.insecure:
-                return _scan_insecure(url, args, finding)
+            if options.insecure:
+                return _scan_insecure(url, options, finding)
             return {"url": url, "status": None, "findings": [finding],
                     "note": "other checks skipped: no trusted HTTPS connection (--insecure runs them anyway)"}, 1, None
-        return None, 2, fetch.describe_fetch_error(url, err, args.timeout, args.retries + 1)
-    return (*run_checks(url, fetched, args), None)
+        return None, 2, fetch.describe_fetch_error(url, err, options.timeout, options.retries + 1)
+    return (*run_checks(url, fetched, options), None)
 
 
-def _scan_insecure(url, args, cert_finding):
+def _scan_insecure(url, options, cert_finding):
     """Run the checks without certificate verification after the certificate failed.
 
     The unverified context is created here and passed down explicitly, so it
@@ -231,12 +231,12 @@ def _scan_insecure(url, args, cert_finding):
     """
     context = fetch.unverified_context()
     try:
-        fetched = fetch.fetch_with_retries(url, args.timeout, args.retries, context=context)
+        fetched = fetch.fetch_with_retries(url, options.timeout, options.retries, context=context)
     except fetch.FETCH_ERRORS as err:
         result = {"url": url, "status": None, "findings": [cert_finding],
                   "note": "other checks skipped: the target could not be fetched even without certificate verification"}
-        return result, 2, fetch.describe_fetch_error(url, err, args.timeout, args.retries + 1)
-    result, code = run_checks(url, fetched, args, context=context)
+        return result, 2, fetch.describe_fetch_error(url, err, options.timeout, options.retries + 1)
+    result, code = run_checks(url, fetched, options, context=context)
     # check_tls verifies on its own and would repeat the same failure.
     others = [f for f in result["findings"] if f.check != "tls-certificate"]
     result["findings"] = [cert_finding, *others]
@@ -244,36 +244,31 @@ def _scan_insecure(url, args, cert_finding):
     return result, max(code, 1), None
 
 
-def run_checks(url, fetched, args, context=None):
+def run_checks(url, fetched, options, context=None):
     """Run the selected checks on a fetched target. Returns (result, exit code)."""
     final_url, response_headers, set_cookies, status = fetched
-
-    def wanted(name):
-        if args.only is not None:
-            return name in args.only
-        return args.skip is None or name not in args.skip
 
     # Checks that need their own requests are wrapped in lambdas, so a check
     # left out with --only/--skip never touches the network.
     http_url = transport.http_url_for(url)
     later = [
         ("cookies", lambda: cookies.check_cookies(set_cookies, final_url.startswith("https://"))),
-        ("cors", lambda: probe_cors(final_url, args.timeout, context=context)),
-        ("tls-certificate", lambda: check_tls(final_url, args.timeout)),
-        ("tls-protocols", lambda: check_legacy_tls(final_url, args.timeout)),
-        ("caa", lambda: check_caa(final_url, args.timeout)),
-        ("security-txt", lambda: check_security_txt(final_url, args.timeout, context=context)),
-        ("spf", lambda: check_spf(final_url, args.timeout)),
-        ("dmarc", lambda: check_dmarc(final_url, args.timeout)),
-        ("dkim", lambda: check_dkim(final_url, args.timeout, args.dkim_selector)),
+        ("cors", lambda: probe_cors(final_url, options.timeout, context=context)),
+        ("tls-certificate", lambda: check_tls(final_url, options.timeout)),
+        ("tls-protocols", lambda: check_legacy_tls(final_url, options.timeout)),
+        ("caa", lambda: check_caa(final_url, options.timeout)),
+        ("security-txt", lambda: check_security_txt(final_url, options.timeout, context=context)),
+        ("spf", lambda: check_spf(final_url, options.timeout)),
+        ("dmarc", lambda: check_dmarc(final_url, options.timeout)),
+        ("dkim", lambda: check_dkim(final_url, options.timeout, options.dkim_selectors)),
         ("https-redirect", lambda: transport.check_https_redirect(
-            http_url, fetch.fetch_final_url(http_url, args.timeout, context=context))),
+            http_url, fetch.fetch_final_url(http_url, options.timeout, context=context))),
     ]
     # The status goes first: when it is an error page, every finding below describes that page.
-    findings = [transport.check_status(status)] if wanted("http-status") else []
-    findings += [f for f in headers.run(response_headers, https=final_url.startswith("https://")) if wanted(f.check)]
-    findings += [run() for name, run in later if wanted(name)]
-    return {"url": final_url, "status": status, "findings": findings, "note": None}, exit_code(findings, args.fail_on)
+    findings = [transport.check_status(status)] if options.wanted("http-status") else []
+    findings += [f for f in headers.run(response_headers, https=final_url.startswith("https://")) if options.wanted(f.check)]
+    findings += [run() for name, run in later if options.wanted(name)]
+    return {"url": final_url, "status": status, "findings": findings, "note": None}, exit_code(findings, options.fail_on)
 
 
 def exit_code(findings, fail_on):

@@ -3,7 +3,7 @@
 import json
 from datetime import datetime, timezone
 
-from . import __version__, markdown, runner, sarif, score
+from . import __version__, checks, markdown, sarif, score
 from .textsafe import printable
 
 
@@ -43,7 +43,7 @@ def to_text(result):
 
 
 def to_sarif(results, errors=(), anchor=None):
-    log = sarif.render(results, runner.ALL_CHECKS, runner.CHECK_SUMMARIES, errors=errors, anchor=anchor)
+    log = sarif.render(results, checks.NAMES, checks.SUMMARIES, errors=errors, anchor=anchor)
     return json.dumps(log, indent=2) + "\n"
 
 
