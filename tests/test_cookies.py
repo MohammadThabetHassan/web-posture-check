@@ -169,6 +169,51 @@ class CookieChainTest(unittest.TestCase):
         self.assertEqual(f.status, PASS)
         self.assertIn("1 deletion(s) ignored", f.detail)
 
+    def test_a_redirect_from_another_host_keeps_its_own_cookie(self):
+        # A browser keeps both host-only cookies: the insecure one from 127.0.0.1
+        # is not replaced by the good one that localhost sets later.
+        from webposture.cookies import SetCookie
+        f = cookies.check_cookies([SetCookie("sid=insecure; Path=/", "https://127.0.0.1/", redirect=True),
+                                   SetCookie("sid=good; Path=/; Secure; HttpOnly; SameSite=Lax", "https://localhost/")],
+                                  is_https=True)
+        self.assertEqual(f.status, FAIL)
+        self.assertIn("sid (set by the redirect at https://127.0.0.1/): missing Secure", f.detail)
+
+    def test_a_deletion_by_another_host_does_not_hide_a_cookie(self):
+        from webposture.cookies import SetCookie
+        f = cookies.check_cookies([SetCookie("sid=insecure; Path=/", "https://www.example.com/", redirect=True),
+                                   SetCookie("sid=; Path=/; Max-Age=0", "https://example.com/")], is_https=True)
+        self.assertEqual(f.status, FAIL)
+        self.assertIn("sid (set by the redirect at https://www.example.com/): missing Secure", f.detail)
+
+    def test_a_domain_cookie_is_shared_by_the_hosts_of_that_domain(self):
+        from webposture.cookies import SetCookie
+        f = cookies.check_cookies([SetCookie("sid=1; Domain=.Example.com; Path=/", "https://www.example.com/", redirect=True),
+                                   SetCookie("sid=; Domain=example.com; Path=/; Max-Age=0", "https://example.com/")],
+                                  is_https=True)
+        self.assertEqual(f.status, PASS)
+        self.assertIn("no cookies set (1 deletion(s) ignored)", f.detail)
+
+    def test_without_path_the_cookie_belongs_to_the_directory_that_set_it(self):
+        from webposture.cookies import SetCookie
+        good = "Secure; HttpOnly; SameSite=Lax"
+        two = cookies.check_cookies([SetCookie(f"sid=1; {good}", "https://example.com/account/login", redirect=True),
+                                     SetCookie(f"sid=2; {good}", "https://example.com/")], is_https=True)
+        self.assertIn("2 cookie(s)", two.detail)
+        # Set at / without Path, then deleted with Path=/: the same cookie, so it is gone.
+        gone = cookies.check_cookies([SetCookie("sid=1", "https://example.com/start", redirect=True),
+                                      SetCookie("sid=; Path=/; Max-Age=0", "https://example.com/")], is_https=True)
+        self.assertEqual(gone.status, PASS)
+        self.assertIn("no cookies set", gone.detail)
+
+    def test_cookie_identity(self):
+        key = cookies.cookie_key
+        self.assertEqual(key("a", {}, "https://Example.com/x/y/z"), ("a", "example.com", True, "/x/y"))
+        self.assertEqual(key("a", {"path": "nope"}, "https://example.com/x"), ("a", "example.com", True, "/"))
+        self.assertEqual(key("a", {"domain": ".EXAMPLE.com", "path": "/p"}, "https://www.example.com/"),
+                         ("a", "example.com", False, "/p"))
+        self.assertEqual(key("a", {}), ("a", "", True, "/"))
+
     def test_same_name_with_another_path_is_another_cookie(self):
         from webposture.cookies import SetCookie
         f = cookies.check_cookies([SetCookie("sid=1; Path=/a; Secure; HttpOnly; SameSite=Lax", "https://example.com/"),

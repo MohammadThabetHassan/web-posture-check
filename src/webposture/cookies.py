@@ -10,10 +10,12 @@ the redirect chain, each with the URL that sent it.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import NamedTuple
+from urllib.parse import urlsplit
 
 from .findings import FAIL, PASS, WARN, Finding
 
@@ -94,11 +96,9 @@ def is_deletion(attributes: dict[str, str], now: datetime) -> bool:
     browser discards the cookie, so there is nothing to protect.
     Max-Age takes precedence over Expires (RFC 6265, section 5.3).
     """
-    if "max-age" in attributes:
-        try:
-            return int(attributes["max-age"]) <= 0
-        except ValueError:
-            pass
+    # RFC 6265 section 5.2.2: a Max-Age that is not an optional "-" and digits is ignored.
+    if re.fullmatch(r"-?[0-9]+", attributes.get("max-age", "")):
+        return int(attributes["max-age"]) <= 0
     if "expires" in attributes:
         try:
             expires = parsedate_to_datetime(attributes["expires"])
@@ -110,24 +110,50 @@ def is_deletion(attributes: dict[str, str], now: datetime) -> bool:
     return False
 
 
+def _default_path(url: str) -> str:
+    """RFC 6265 section 5.1.4: the directory of the request path (/account/login -> /account)."""
+    path = urlsplit(url).path
+    if not path.startswith("/") or path.count("/") == 1:
+        return "/"
+    return path[:path.rindex("/")]
+
+
+def cookie_key(name: str, attributes: dict[str, str], url: str = "") -> tuple[str, str, bool, str]:
+    """How a browser's cookie store identifies a cookie: (name, domain, host-only, path).
+
+    The domain is the Domain attribute (lower case, without a leading dot), or
+    else the host that set the cookie, which makes it host-only. The path is the
+    Path attribute if it starts with "/", or else the default path of the URL
+    that set it (RFC 6265 sections 5.2.3, 5.2.4 and 5.3; host-only is part of
+    the identity in RFC 6265bis and in browsers). url is "" when unknown.
+    """
+    domain = attributes.get("domain", "").lower().lstrip(".")
+    host = (urlsplit(url).hostname or "") if url else ""
+    path = attributes.get("path", "")
+    if not path.startswith("/"):
+        path = _default_path(url) if url else "/"
+    return name, domain or host, not domain, path
+
+
 def check_cookies(set_cookies: Sequence[str | SetCookie], is_https: bool, now: datetime | None = None) -> Finding:
     """Check every cookie the response chain leaves in the browser.
 
     set_cookies are SetCookie entries, or plain Set-Cookie values sent by the
     final response, whose scheme is_https gives. A later Set-Cookie for the same
-    name, domain and path replaces an earlier one, as in a browser's cookie store
+    cookie (cookie_key) replaces an earlier one, as in a browser's cookie store
     (RFC 6265 section 5.3, step 11), so a cookie set on a redirect and deleted or
-    re-set by the final page is judged by its last version.
+    re-set by the final page is judged by its last version, while a cookie of the
+    same name set by another host or for another path is a cookie of its own.
     """
     now = now or datetime.now(timezone.utc)
-    jar: dict[tuple[str, str, str], tuple[str, dict[str, str], bool, str | None]] = {}
+    jar: dict[tuple[str, str, bool, str], tuple[str, dict[str, str], bool, str | None]] = {}
     for item in set_cookies:
         if isinstance(item, SetCookie):
-            value, https, via = item.value, item.url.lower().startswith("https://"), item.url if item.redirect else None
+            value, url, https, via = item.value, item.url, urlsplit(item.url).scheme == "https", item.url if item.redirect else None
         else:
-            value, https, via = item, is_https, None
+            value, url, https, via = item, "", is_https, None
         name, attributes = parse_set_cookie(value)
-        key = (name, attributes.get("domain", "").lower().lstrip("."), attributes.get("path", ""))
+        key = cookie_key(name, attributes, url)
         jar.pop(key, None)  # keep the report in the order of the last write
         jar[key] = (name, attributes, https, via)
     live = [entry for entry in jar.values() if not is_deletion(entry[1], now)]
