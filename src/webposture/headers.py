@@ -29,7 +29,10 @@ _NONCE_OR_HASH = re.compile(r"'(?:nonce|sha256|sha384|sha512)-[a-z0-9+/_-]+={0,2
 # A host-source whose host is "*", or a wildcard right under a top-level domain
 # (*.com, where anyone can register a name), with any scheme, port and path
 # (CSP3 section 2.3.1): https://*, *:443, *:*, http://*/js/, https://*.com.
-_ANY_HOST_SOURCE = re.compile(r"(?:(?P<scheme>[a-z][a-z0-9+.-]*)://)?\*(?:\.[a-z0-9-]+)?(?::(?:[0-9]+|\*))?(?:/.*)?")
+_ANY_HOST_SOURCE = re.compile(r"(?:(?P<scheme>[a-z][a-z0-9+.-]*)://)?\*(?:\.(?P<tld>[a-z0-9-]+))?(?::(?:[0-9]+|\*))?(?:/.*)?")
+
+# Special-use names nobody can register (RFC 2606, RFC 6761, RFC 6762, ICANN's .internal).
+_RESERVED_TLDS = frozenset({"localhost", "test", "invalid", "example", "local", "internal"})
 
 # For each part of script loading, the directives that govern it, most specific
 # first: the first one a policy has is the one that applies (CSP3 section 6.8.4,
@@ -59,15 +62,15 @@ _TOKEN = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
 _QUOTED_STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
 
 
-def _hsts_directives(value: str, strict: bool = True) -> dict[str, str | None] | str:
+def _hsts_directives(value: str) -> dict[str, str | None] | str:
     """Directive name (lower case) -> value with quotes removed, or None for a bare directive.
 
-    Returns why the header is invalid instead. Both modes reject what every
-    browser rejects: a repeated max-age or includeSubDomains, an
-    includeSubDomains with a value, or a malformed max-age or includeSubDomains.
-    strict also rejects any other directive outside the RFC 6797 grammar, as
-    stricter parsers such as Firefox's do; with strict=False such a directive
-    is skipped, as Chromium skips a directive it does not know.
+    Returns why browsers ignore the whole header instead, as Chromium's parser
+    (net/http/http_security_headers.cc) and RFC 6797 section 6.1 decide: a
+    directive name that is not a token, a value that is neither a token nor a
+    quoted string (an empty value is accepted), a repeated max-age or
+    includeSubDomains, or an includeSubDomains with a value. Other directives,
+    preload among them, may repeat and are otherwise ignored.
     """
     directives: dict[str, str | None] = {}
     for part in split_list(value, ";"):
@@ -75,18 +78,18 @@ def _hsts_directives(value: str, strict: bool = True) -> dict[str, str | None] |
             continue
         name, sep, raw = part.partition("=")
         name, raw = name.strip(" \t"), raw.strip(" \t")
-        lower = name.lower()
-        known = lower in ("max-age", "includesubdomains")
-        quoted = bool(sep) and bool(_QUOTED_STRING.fullmatch(raw))
-        if not _TOKEN.fullmatch(name) or (sep and not quoted and not _TOKEN.fullmatch(raw)):
-            if strict or known:
-                return f"'{name}' is not a valid directive" if not _TOKEN.fullmatch(name) else f"the value of {name} is not valid"
-            continue
+        if not _TOKEN.fullmatch(name):
+            return f"'{name}' is not a valid directive"
+        quoted = raw.startswith('"')
+        valid_value = _QUOTED_STRING.fullmatch(raw) if quoted else not raw or _TOKEN.fullmatch(raw)
+        if not valid_value:
+            return f"the value of {name} is not valid"
         if quoted:
             raw = re.sub(r"\\(.)", r"\1", raw[1:-1])
-        if known and lower in directives:
+        lower = name.lower()
+        if lower in ("max-age", "includesubdomains") and lower in directives:
             return f"it repeats {name}"
-        if lower == "includesubdomains" and sep:
+        if lower == "includesubdomains" and (raw or quoted):
             return "includeSubDomains takes no value"
         directives[lower] = raw if sep else None
     return directives
@@ -117,15 +120,7 @@ def _check_hsts(headers: HeaderSource, https: bool) -> Finding:
     extra = f" (first of {len(values)} Strict-Transport-Security headers; browsers use only the first)" if len(values) > 1 else ""
     directives = _hsts_directives(value)
     if isinstance(directives, str):
-        accepted = _hsts_directives(value, strict=False)
-        if isinstance(accepted, str):
-            return Finding("hsts", FAIL, f"Strict-Transport-Security is not valid ({accepted}), so browsers ignore it: '{value}'{extra}")
-        # Chromium skips the unknown directive; a stricter parser drops the whole header.
-        finding = _judge_hsts(accepted, extra)
-        if finding.status == FAIL:
-            return finding
-        return Finding("hsts", WARN, f"{finding.detail}; but it is outside the RFC 6797 grammar ({directives}), so Chromium-based "
-                                     "browsers apply it and stricter ones, such as Firefox, may ignore it")
+        return Finding("hsts", FAIL, f"Strict-Transport-Security is not valid ({directives}), so browsers ignore it: '{value}'{extra}")
     return _judge_hsts(directives, extra)
 
 
@@ -209,6 +204,8 @@ def _reach(sources: list[str]) -> set[str]:
             reach.add(source[:-1])
         else:
             match = _ANY_HOST_SOURCE.fullmatch(source)
+            if match and match["tld"] in _RESERVED_TLDS:
+                continue
             if match and match["scheme"] in (None, "http"):
                 reach |= {"http", "https"}
             elif match and match["scheme"] == "https":

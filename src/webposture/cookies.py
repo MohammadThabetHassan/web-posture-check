@@ -133,6 +133,16 @@ def _domain_match(host: str, domain: str) -> bool:
     return host == domain or (host.endswith("." + domain) and not _is_ip(host))
 
 
+def secure_origin(url: str) -> bool:
+    """Whether browsers treat url as a secure origin for Secure cookies: https://, or a loopback host
+    (localhost, *.localhost, 127.0.0.0/8, ::1), which Chrome and Firefox trust over plain HTTP too."""
+    parts = urlsplit(url)
+    host = parts.hostname or ""
+    if parts.scheme == "https" or host == "localhost" or host.endswith(".localhost"):
+        return True
+    return _is_ip(host) and ipaddress.ip_address(host).is_loopback
+
+
 def _path_match(path: str, cookie_path: str) -> bool:
     """RFC 6265 section 5.1.4."""
     return path == cookie_path or (path.startswith(cookie_path) and (cookie_path.endswith("/") or path[len(cookie_path)] == "/"))
@@ -189,18 +199,20 @@ def check_cookies(set_cookies: Sequence[str | SetCookie], is_https: bool, now: d
 
     A Set-Cookie the browser rejects changes nothing: a Domain that does not
     cover the host that sent it, a Secure cookie sent over plain HTTP, or a
-    cookie from plain HTTP that would replace a Secure one (RFC 6265bis).
+    cookie from plain HTTP that would replace a Secure one (RFC 6265bis; plain
+    HTTP to a loopback host counts as secure, as in browsers).
     """
     now = now or datetime.now(timezone.utc)
     jar: dict[tuple[str, str, bool, str], tuple[str, dict[str, str], bool, str | None]] = {}
     for item in set_cookies:
         if isinstance(item, SetCookie):
             value, url, https, via = item.value, item.url, urlsplit(item.url).scheme == "https", item.url if item.redirect else None
+            trusted = secure_origin(item.url)
         else:
-            value, url, https, via = item, "", is_https, None
+            value, url, https, via, trusted = item, "", is_https, None, is_https
         name, attributes = parse_set_cookie(value)
         key = cookie_key(name, attributes, url)
-        if key is None or (not https and ("secure" in attributes or _overwrites_secure(key, jar, now))):
+        if key is None or (not trusted and ("secure" in attributes or _overwrites_secure(key, jar, now))):
             continue
         jar.pop(key, None)  # keep the report in the order of the last write
         jar[key] = (name, attributes, https, via)

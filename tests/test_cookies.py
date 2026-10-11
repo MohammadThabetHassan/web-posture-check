@@ -246,10 +246,29 @@ class CookieChainTest(unittest.TestCase):
         self.assertEqual(f.status, WARN)
         self.assertIn("sid (set by the redirect at https://example.com/): missing HttpOnly, missing SameSite", f.detail)
 
+    def test_plain_http_may_set_cookies_that_do_not_collide_with_a_secure_one(self):
+        # RFC 6265bis 5.7: only a same-name cookie whose path path-matches the Secure one's is refused.
+        from webposture.cookies import SetCookie
+        good = "HttpOnly; SameSite=Lax"
+        f = cookies.check_cookies([SetCookie(f"sid=1; Secure; Path=/app; {good}", "https://example.com/app/", redirect=True),
+                                   SetCookie(f"other=1; Path=/; {good}", "http://example.com/"),
+                                   SetCookie(f"sid=2; Path=/; {good}", "http://example.com/")], is_https=False)
+        self.assertEqual(f.detail, "3 cookie(s), no flag problems found")
+
     def test_a_secure_cookie_from_plain_http_is_not_stored(self):
         from webposture.cookies import SetCookie
         f = cookies.check_cookies([SetCookie("sid=1; Secure; HttpOnly; SameSite=Lax", "http://example.com/")], is_https=False)
         self.assertEqual((f.status, f.detail), ("PASS", "no cookies set"))
+
+    def test_plain_http_to_a_loopback_host_is_a_secure_origin(self):
+        # Chrome and Firefox accept Secure cookies from http://localhost and 127.0.0.1.
+        from webposture.cookies import SetCookie
+        for url in ("http://localhost:8080/", "http://app.localhost/", "http://127.0.0.1/", "http://[::1]/"):
+            self.assertTrue(cookies.secure_origin(url), url)
+            f = cookies.check_cookies([SetCookie("sid=1; Secure; HttpOnly; SameSite=Lax", url)], is_https=False)
+            self.assertEqual(f.detail, "1 cookie(s), no flag problems found", url)
+        for url in ("http://example.com/", "http://10.0.0.1/", "http://localhost.example/"):
+            self.assertFalse(cookies.secure_origin(url), url)
 
     def test_same_name_with_another_path_is_another_cookie(self):
         from webposture.cookies import SetCookie

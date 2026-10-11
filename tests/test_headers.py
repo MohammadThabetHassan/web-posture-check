@@ -351,16 +351,24 @@ class HstsStandardTest(unittest.TestCase):
         self.assertEqual(f.status, FAIL)
         self.assertIn("includeSubDomains takes no value", f.detail)
 
-    def test_an_unknown_directive_outside_the_grammar_is_a_warning(self):
-        # Chromium skips a directive it does not know, so the header still works there;
-        # a parser that follows the RFC grammar (Firefox's) drops the whole header.
+    def test_any_directive_outside_the_grammar_makes_the_header_invalid(self):
+        # Chromium's parser (net/http/http_security_headers.cc) rejects the header when
+        # any directive's name, or unquoted value, is not a token, known directive or not.
         for value in ("max-age=31536000; include Sub Domains", 'max-age=31536000; x="unterminated',
-                      "max-age=31536000; x=", "max-age=31536000; x=a b", "max-age=31536000; (x)",
-                      "max-age=31536000; report-uri=https://r.example/x"):
+                      "max-age=31536000; x=a b", "max-age=31536000; (x)", "max-age=31536000; =x",
+                      "max-age=31536000; report-uri=https://r.example/x", 'max-age=31536000; x="oops; includeSubDomains'):
             f = headers.check_hsts({"Strict-Transport-Security": value})
-            self.assertEqual(f.status, WARN, value)
-            self.assertIn("outside the RFC 6797 grammar", f.detail, value)
-            self.assertIn("Chromium-based browsers apply it", f.detail, value)
+            self.assertEqual(f.status, FAIL, value)
+            self.assertIn("is not valid", f.detail, value)
+
+    def test_an_empty_value_is_accepted(self):
+        # Chromium accepts "x=" and "includeSubDomains=" (no value), but not includeSubDomains="".
+        self.assertEqual(headers.check_hsts({"Strict-Transport-Security": "max-age=31536000; x="}).status, PASS)
+        f = headers.check_hsts({"Strict-Transport-Security": "max-age=31536000; includeSubDomains="})
+        self.assertEqual((f.status, f.detail), (PASS, "max-age=31536000; includeSubDomains"))
+        f = headers.check_hsts({"Strict-Transport-Security": 'max-age=31536000; includeSubDomains=""'})
+        self.assertEqual(f.status, FAIL)
+        self.assertIn("includeSubDomains takes no value", f.detail)
 
     def test_a_malformed_max_age_or_include_subdomains_is_ignored_by_every_browser(self):
         for value in ("max-age=1 2", "max-age=31536000; includeSubDomains=true", "max-age=(1)"):
@@ -507,6 +515,9 @@ class CspParsingTest(unittest.TestCase):
             f = headers.check_csp({"Content-Security-Policy": f"script-src 'self' {source}"})
             self.assertEqual(f.status, WARN, source)
             self.assertIn(f"({source})", f.detail)
+        # Nobody can register under a special-use name.
+        for source in ("*.localhost", "https://*.test", "*.internal"):
+            self.assertEqual(headers.check_csp({"Content-Security-Policy": f"script-src 'self' {source}"}).status, PASS, source)
 
 
 class CspScriptModelTest(unittest.TestCase):
