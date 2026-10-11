@@ -95,6 +95,19 @@ class OfficialVectorsTest(unittest.TestCase):
             self.assertEqual(publicsuffix.registrable_domain(name), want, name)
 
 
+class BundledListTest(unittest.TestCase):
+    def test_the_bundled_list_is_whole(self):
+        # A refresh that saved an error page or a cut-off file must fail here, not in a scan.
+        from importlib import resources
+        text = resources.files("webposture").joinpath("public_suffix_list.dat").read_text(encoding="utf-8")
+        self.assertIn("This Source Code Form is subject to the terms of the Mozilla Public", text.splitlines()[0])
+        self.assertRegex(text, r"// VERSION: \d{4}-\d{2}-\d{2}")
+        for marker in ("===BEGIN ICANN DOMAINS===", "===END ICANN DOMAINS===",
+                       "===BEGIN PRIVATE DOMAINS===", "===END PRIVATE DOMAINS==="):
+            self.assertIn(marker, text)
+        self.assertGreater(len(publicsuffix._rules().normal), 9000)
+
+
 class BrowserCasesTest(unittest.TestCase):
     """Names whose cookie Domain Chromium, Firefox and WebKit all refuse or all accept."""
 

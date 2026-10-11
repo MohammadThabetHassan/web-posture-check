@@ -82,6 +82,18 @@ jobs:
           # The wheel must carry the type marker (PEP 561) and the Public Suffix List.
           python -m zipfile -l dist/*.whl | grep -q "webposture/py.typed"
           python -m zipfile -l dist/*.whl | grep -q "webposture/public_suffix_list.dat"
+      - name: The bundled Public Suffix List is recent
+        # A reminder, not a failure: refresh it with the command in CONTRIBUTING.
+        run: |
+          python - <<'PY'
+          import datetime, pathlib, re
+          text = pathlib.Path("src/webposture/public_suffix_list.dat").read_text(encoding="utf-8")
+          version = re.search(r"// VERSION: (\d{4}-\d{2}-\d{2})", text).group(1)
+          age = (datetime.date.today() - datetime.date.fromisoformat(version)).days
+          print(f"Public Suffix List {version}, {age} days old")
+          if age > 90:
+              print(f"::warning file=src/webposture/public_suffix_list.dat::The bundled Public Suffix List is {age} days old; refresh it (see CONTRIBUTING).")
+          PY
       - name: The wheel works on its own, without the dns extra
         run: |
           python -m venv "$RUNNER_TEMP/plain"
