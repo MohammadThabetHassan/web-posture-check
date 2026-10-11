@@ -4,7 +4,21 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- mypy type checking in CI, of every function body including the tests.
+- Branch coverage in CI, with a 97% minimum (99% today) and the coverage table in each job summary.
+- CodeQL analysis of the Python code and the workflows.
+- `tests/test_tls_live.py`: the certificate fetch and the TLS 1.0/1.1 probes against a real local TLS server with a throwaway CA, and `tests/test_runner.py` for lookup failures.
+
+### Fixed
+
+- A server whose certificate has no expiry date is reported as untrusted instead of crashing the certificate check.
+- The TLS 1.0/1.1 probe no longer emits a `DeprecationWarning` when it asks for those versions.
+
+### Changed
+
+- Every action in the CI workflows is pinned to a commit SHA.
 
 ## [0.3.0] - 2026-10-10
 

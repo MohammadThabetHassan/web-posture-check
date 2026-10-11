@@ -32,7 +32,11 @@ def fetch_certificate(host, port=443, timeout=10.0):
             cert = tls.getpeercert()
     except ssl.SSLCertVerificationError as err:
         return None, err.verify_code, err.verify_message
-    not_after = datetime.fromtimestamp(ssl.cert_time_to_seconds(cert["notAfter"]), tz=timezone.utc)
+    # A verified connection always has a certificate; this only guards the types.
+    not_after_text = cert.get("notAfter") if cert else None
+    if not isinstance(not_after_text, str):
+        return None, None, "the server sent no certificate expiry date"
+    not_after = datetime.fromtimestamp(ssl.cert_time_to_seconds(not_after_text), tz=timezone.utc)
     return not_after, None, None
 
 
@@ -88,8 +92,11 @@ def probe_version(host, port, version, timeout=10.0):
     context.check_hostname = False
     context.verify_mode = ssl.CERT_NONE
     try:
-        context.minimum_version = version
-        context.maximum_version = version
+        # Setting a deprecated version warns too; asking for it is the point of the probe.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            context.minimum_version = version
+            context.maximum_version = version
         # OpenSSL 3 refuses TLS 1.0/1.1 at its default security level, which
         # would look like the server refusing. Lower it for this probe only.
         context.set_ciphers("DEFAULT:@SECLEVEL=0")

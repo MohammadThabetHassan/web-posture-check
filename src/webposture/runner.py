@@ -47,10 +47,10 @@ def check_tls(url, timeout):
     if parts.scheme != "https":
         return Finding("tls-certificate", WARN, "the final URL is not HTTPS, so there is no certificate to check")
     try:
-        result = tls.fetch_certificate(parts.hostname, parts.port or 443, timeout)
+        not_after, verify_code, verify_message = tls.fetch_certificate(parts.hostname, parts.port or 443, timeout)
     except OSError as err:
         return Finding("tls-certificate", WARN, f"could not check the certificate: {err}")
-    return tls.check_certificate(*result, now=datetime.now(timezone.utc))
+    return tls.check_certificate(not_after, verify_code, verify_message, now=datetime.now(timezone.utc))
 
 
 def check_legacy_tls(url, timeout):

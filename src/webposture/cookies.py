@@ -109,7 +109,7 @@ def check_cookies(set_cookie_values, is_https, now=None):
         problems = _problems(name, attributes, is_https)
         if problems:
             notes.append(f"{name}: " + ", ".join(msg for _, msg in problems))
-            status = max([status] + [s for s, _ in problems], key=_RANK.get)
+            status = max([status] + [s for s, _ in problems], key=lambda s: _RANK[s])
     if not notes:
         return Finding("cookies", PASS, f"{len(live)} cookie(s), no flag problems found" + suffix)
     return Finding("cookies", status, "; ".join(notes))

@@ -42,8 +42,8 @@ Changelog = "https://github.com/MohammadThabetHassan/web-posture-check/blob/main
 [project.optional-dependencies]
 # DNS-based checks (CAA, SPF, DMARC, DKIM). The core tool stays dependency-free.
 dns = ["dnspython>=2.0"]
-# Development tools, pinned so CI and local runs lint the same way.
-dev = ["ruff==0.17.0"]
+# Development tools, pinned so CI and local runs check the same way.
+dev = ["ruff==0.17.0", "mypy==2.3.1", "coverage==7.16.2"]
 
 [project.scripts]
 web-posture-check = "webposture.cli:main"
@@ -70,3 +70,25 @@ ignore = ["E501"]
 [tool.ruff.lint.per-file-ignores]
 # Tests keep fixed lookup tables as plain class attributes.
 "tests/*" = ["RUF012"]
+
+[tool.mypy]
+# The oldest version mypy still checks; the code itself supports 3.9 (CI tests it there).
+python_version = "3.10"
+files = ["src", "tests"]
+# The code is mostly unannotated, so check inside every function too.
+check_untyped_defs = true
+strict_equality = true
+warn_unreachable = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+[tool.coverage.run]
+branch = true
+source = ["webposture"]
+
+[tool.coverage.report]
+# Branch coverage; CI fails below this.
+fail_under = 97
+show_missing = true
+skip_covered = true
+exclude_also = ['if __name__ == "__main__":']

@@ -20,7 +20,7 @@ def parse_fields(body):
     Comments and blank lines are skipped. In a PGP-signed file, lines that
     start with "- " are dash-escaped (RFC 4880) and the prefix is removed.
     """
-    fields = {}
+    fields: dict[str, list[str]] = {}
     for raw in body.splitlines():
         line = raw[2:] if raw.startswith("- ") else raw
         line = line.strip()
@@ -76,6 +76,6 @@ def check_security_txt(status, content_type, body, now):
             problems.append(f"expired on {expires.date()}")
         elif expires - now > MAX_EXPIRES_AHEAD:
             problems.append(f"Expires {expires.date()} is more than a year away (RFC 9116 recommends less, to avoid stale contacts)")
-    if problems:
+    if problems or expires is None:
         return Finding("security-txt", WARN, f"{PATH}: " + "; ".join(problems))
     return Finding("security-txt", PASS, f"Contact: {contacts[0]}; expires {expires.date()}")

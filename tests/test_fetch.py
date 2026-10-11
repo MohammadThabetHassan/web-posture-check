@@ -13,7 +13,7 @@ def _closed_port():
 
 
 class _Redirect(BaseHTTPRequestHandler):
-    target = None
+    target = ""
 
     def do_GET(self):
         self.send_response(301)

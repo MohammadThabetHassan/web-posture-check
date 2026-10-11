@@ -111,11 +111,17 @@ class CheckSelectionTest(unittest.TestCase):
 
     def _run(self, *argv):
         called = []
+
+        def record(name, value):
+            called.append(name)
+            return value
+
         patches = [mock.patch.object(fetch, "fetch_headers", return_value=("https://example.com/", {}, [], 200)),
-                   mock.patch.object(fetch, "fetch_final_url", side_effect=lambda *a, **k: called.append("https-redirect") or "https://example.com/")]
+                   mock.patch.object(fetch, "fetch_final_url",
+                                     side_effect=lambda *a, **k: record("https-redirect", "https://example.com/"))]
         for func, name in self.NETWORK.items():
             patches.append(mock.patch.object(
-                runner, func, side_effect=lambda *a, _n=name, **k: called.append(_n) or Finding(_n, "PASS", "ok")))
+                runner, func, side_effect=lambda *a, _n=name, **k: record(_n, Finding(_n, "PASS", "ok"))))
         out = io.StringIO()
         for p in patches:
             p.start()
@@ -182,7 +188,7 @@ class MultipleTargetsTest(unittest.TestCase):
     """Several targets in one run. Fetches are mocked; no network needed."""
 
     # hsts passes on good.example, fails on bad.example; down.example is unreachable.
-    RESPONSES = {
+    RESPONSES: dict[str, tuple] = {
         "https://good.example": ("https://good.example/", {"Strict-Transport-Security": "max-age=31536000"}, [], 200),
         "https://bad.example": ("https://bad.example/", {}, [], 200),
     }
@@ -294,7 +300,7 @@ class FailOnTest(unittest.TestCase):
 class RetryTest(unittest.TestCase):
     """Transient failures are retried and explained. No network, no real sleeping."""
 
-    OK = ("https://example.com/", {"Strict-Transport-Security": "max-age=31536000"}, [], 200)
+    OK: tuple = ("https://example.com/", {"Strict-Transport-Security": "max-age=31536000"}, [], 200)
 
     def setUp(self):
         sleep = mock.patch.object(fetch.time, "sleep")
@@ -352,7 +358,7 @@ class RetryTest(unittest.TestCase):
 class InsecureTest(unittest.TestCase):
     """--insecure runs the checks after a certificate failure, and only then. No network needed."""
 
-    OK = ("https://bad-cert.example/", {"Strict-Transport-Security": "max-age=31536000"}, [], 200)
+    OK: tuple = ("https://bad-cert.example/", {"Strict-Transport-Security": "max-age=31536000"}, [], 200)
 
     def _run(self, *argv):
         contexts = []
@@ -624,7 +630,8 @@ class ActionOutputsTest(unittest.TestCase):
         action = os.path.join(os.path.dirname(__file__), "..", "action.yml")
         with open(action, encoding="utf-8") as handle:
             match = re.search(r'findall\(r"(.+?)",', handle.read())
-        self.assertIsNotNone(match, "could not find the score/grade regex in action.yml")
+        if match is None:
+            self.fail("could not find the score/grade regex in action.yml")
         pattern = match.group(1)
 
         now = datetime(2026, 10, 10, tzinfo=timezone.utc)

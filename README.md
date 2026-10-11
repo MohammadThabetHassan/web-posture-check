@@ -7,6 +7,9 @@
 Security headers · cookies · CORS · TLS · CAA · security.txt · SPF · DMARC · DKIM · HTTPS redirect
 
 [![CI](https://github.com/MohammadThabetHassan/web-posture-check/actions/workflows/ci.yml/badge.svg)](https://github.com/MohammadThabetHassan/web-posture-check/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/MohammadThabetHassan/web-posture-check/actions/workflows/codeql.yml/badge.svg)](https://github.com/MohammadThabetHassan/web-posture-check/actions/workflows/codeql.yml)
+[![Branch coverage](https://img.shields.io/badge/branch%20coverage-%E2%89%A597%25%20enforced-brightgreen)](#development)
+[![Checked with mypy](https://img.shields.io/badge/mypy-checked-blue)](#development)
 [![PyPI](https://img.shields.io/pypi/v/web-posture-check)](https://pypi.org/project/web-posture-check/)
 [![Python](https://img.shields.io/pypi/pyversions/web-posture-check)](https://pypi.org/project/web-posture-check/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
@@ -250,8 +253,9 @@ For a fully reproducible workflow, pin the action to the release's commit SHA in
 
 ```bash
 pip install -e ".[dns,dev]"
-python -m unittest discover -s tests -v
-ruff check src tests
+coverage run -m unittest discover -s tests -v && coverage report   # tests, branch coverage
+ruff check src tests                                               # lint
+mypy                                                               # type check, tests included
 ```
 
 | Module (`src/webposture/`) | Role |
@@ -263,7 +267,16 @@ ruff check src tests
 | `headers.py`, `cookies.py`, `cors.py`, `tls.py`, `transport.py`, `caa.py`, `securitytxt.py`, `emailauth.py` | The checks |
 | `score.py`, `findings.py` | Score and grade, and the `Finding` type |
 
-Checks are pure functions that take a response and return a `Finding`, so most tests need no network. `tests/test_end_to_end.py` runs the real CLI against small web servers on `127.0.0.1`. CI lints with Ruff, runs the suite on Python 3.9, 3.11 and 3.13, and runs the GitHub Action from the checkout, including a case that must fail. Dependabot keeps the SHA-pinned actions and the Python tooling current.
+Checks are pure functions that take a response and return a `Finding`, so most tests need no network. `tests/test_end_to_end.py` runs the real CLI against small web servers on `127.0.0.1`, and `tests/test_tls_live.py` runs real TLS handshakes against a local server with a throwaway CA made by `openssl`, so the certificate and protocol code is tested without mocks. No test touches the internet.
+
+CI on every change:
+
+- **Ruff** lint and **mypy** type checking (every function body, tests included).
+- The test suite on Python 3.9, 3.11 and 3.13 with **branch coverage**, which must stay at 97% or more (99% today). Each run puts the coverage table in its job summary.
+- **CodeQL** static analysis of the Python code and the workflows (security-extended queries).
+- The GitHub Action run from the checkout: a passing case, a case that must fail, and its SARIF uploaded to code scanning and validated against the OASIS schema.
+
+Every action in the workflows is pinned to a commit SHA, and Dependabot keeps them and the Python tooling current.
 
 ## Releases
 
