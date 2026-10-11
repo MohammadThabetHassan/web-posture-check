@@ -10,6 +10,11 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request replaces the run still going for the old one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   passing-run:
     runs-on: ubuntu-latest
@@ -19,6 +24,8 @@ jobs:
       security-events: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Checks that pass on github.com
         id: scan
         uses: ./
@@ -34,7 +41,7 @@ jobs:
         run: |
           echo "score=$SCORE grade=$GRADE exit-code=$CODE report=$REPORT"
           test "$SCORE" = "100" && test "$GRADE" = "A" && test "$CODE" = "0"
-          grep -q "Web posture report: https://github.com" "$REPORT"
+          grep -qF 'Web posture report: `https://github.com/`' "$REPORT"
       - name: Code scanning accepts the SARIF
         # Pull requests from forks get a read-only token, so they cannot upload.
         if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
@@ -47,6 +54,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: A check that fails on example.com (no HSTS)
         id: scan
         uses: ./

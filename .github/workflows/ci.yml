@@ -8,36 +8,97 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request replaces the run still going for the old one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.13"
       - run: pip install ".[dns,dev]"
       # --output-format=github surfaces findings as inline annotations on the PR.
       - run: ruff check --output-format=github src tests
-      # Type checks every function body, tests included (settings in pyproject.toml).
+      # Strict for the package, every function body for the tests (settings in pyproject.toml).
       - run: mypy
 
   test:
-    runs-on: ubuntu-latest
+    name: test (Python ${{ matrix.python-version }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        python-version: ["3.9", "3.11", "3.13"]
+        # Every supported Python on Linux, and the current one on Windows and macOS.
+        os: [ubuntu-latest]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14", "3.15"]
+        include:
+          - os: windows-latest
+            python-version: "3.13"
+          - os: macos-latest
+            python-version: "3.13"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: ${{ matrix.python-version }}
       # Editable, so the coverage report names files under src/.
       - run: pip install -e ".[dns,dev]"
-      # Branch coverage; the report fails below fail_under in pyproject.toml.
-      - run: coverage run -m unittest discover -s tests -v
+      # tests/offline.py blocks the network (loopback only), so no test can
+      # depend on, or quietly reach, a real site.
+      - name: Tests (network blocked), with branch coverage
+        run: coverage run tests/offline.py -v
+      # The gate (fail_under in pyproject.toml) is checked on Linux, where every
+      # supported Python runs.
       - name: Coverage
+        if: runner.os == 'Linux'
         run: |
           coverage report --format=markdown --no-skip-covered > coverage.md || true
           { echo "### Branch coverage (Python ${{ matrix.python-version }})"; echo; cat coverage.md; } >> "$GITHUB_STEP_SUMMARY"
           coverage report
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Build and check the distributions
+        run: |
+          python -m pip install --quiet build twine
+          python -m build
+          python -m twine check --strict dist/*
+          # PEP 561: the wheel must carry the type marker.
+          python -m zipfile -l dist/*.whl | grep -q "webposture/py.typed"
+      - name: The wheel works on its own, without the dns extra
+        run: |
+          python -m venv "$RUNNER_TEMP/plain"
+          "$RUNNER_TEMP/plain/bin/pip" install --quiet dist/*.whl
+          cd "$RUNNER_TEMP"
+          plain/bin/web-posture-check --version
+          plain/bin/web-posture-check --list-checks
+          # Nothing listens on port 9, so this is the unreachable-target path:
+          # exit code 2 and still a JSON document that names the error.
+          set +e
+          plain/bin/web-posture-check http://127.0.0.1:9/ --json --retries 0 --timeout 3 > unreachable.json
+          code=$?
+          set -e
+          cat unreachable.json
+          test "$code" = 2
+          plain/bin/python -c "import json; d = json.load(open('unreachable.json')); assert d['error'] and d['findings'] == [], d"
+      - name: The wheel installs with the dns extra
+        run: |
+          python -m venv "$RUNNER_TEMP/dns"
+          "$RUNNER_TEMP/dns/bin/pip" install --quiet "$(ls dist/*.whl)[dns]"
+          "$RUNNER_TEMP/dns/bin/python" -c "import dns.resolver, webposture; print('webposture', webposture.__version__)"
