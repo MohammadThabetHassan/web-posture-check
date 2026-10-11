@@ -301,17 +301,17 @@ web-posture-check does not replace the established tools below; it puts a broad,
 
 A good pattern is to run web-posture-check on every change or on a schedule to catch regressions, and the specialist tools when you need depth in one area.
 
-**What web-posture-check does not do:** test ciphers or TLS vulnerabilities (use testssl.sh); check DNSSEC, IPv6, MTA-STS, DANE or mail-server STARTTLS (use internet.nl); crawl a site or test for vulnerabilities such as XSS or SQL injection (use a scanner such as OWASP ZAP). It looks at one URL per target from outside, as a visitor, a mail receiver or an attacker would.
+**What web-posture-check does not do:** test ciphers or TLS vulnerabilities (use testssl.sh); check DNSSEC, IPv6, DANE or mail-server STARTTLS (use internet.nl), or MTA-STS, which internet.nl does not test either; crawl a site or test for vulnerabilities such as XSS or SQL injection (use a scanner such as OWASP ZAP). It looks at one URL per target from outside, as a visitor, a mail receiver or an attacker would.
 
 ## Compatibility
 
 Version 0.x, but scripts and pipelines can rely on these. A change to any of them is listed in the [CHANGELOG](CHANGELOG.md) and only made in a new minor version (0.x to 0.y), never in a patch release:
 
-- **Exit codes** 0, 1 and 2 and what they mean.
+- **Exit codes** 0, 1, 2 and 130 and what they mean.
 - **Check names** (`--list-checks`), which are also the SARIF rule IDs and the names `--only` and `--skip` take. A new check can be added in a minor version; it is announced in the CHANGELOG, since `--fail-on` may then fail on it.
-- **JSON fields**: `url`, `status`, `findings` (`check`, `status`, `detail`), `score`, `grade`, `note`, and `results` for several targets. New fields may be added.
+- **JSON fields**: `url`, `status`, `findings` (`check`, `status`, `detail`), `score`, `grade`, `note`, `error` for a target that could not be scanned, and `results` for several targets. New fields may be added.
 - **Statuses** `PASS`, `WARN` and `FAIL`, and that a skipped check starts its detail with `skipped:`.
-- **Action inputs and outputs**.
+- **Action inputs and outputs**: the inputs `targets`, `args`, `dns` and `python-version`, and the outputs `score`, `grade`, `exit-code`, `report` and `sarif`.
 
 The detail text, the text and Markdown layouts and the exact score of a site can change in any release: a check that becomes more accurate can change a result. Pin a version (`web-posture-check==0.3.0`, or the action at a release SHA) for fully repeatable results.
 

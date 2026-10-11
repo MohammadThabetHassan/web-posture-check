@@ -14,7 +14,7 @@ import unittest
 from contextlib import redirect_stdout
 from unittest import mock
 
-from webposture import cli, fetch, findings, runner
+from webposture import checks, cli, fetch, findings, output, runner
 
 CHECK_NAMES = [
     "http-status", "hsts", "csp", "x-content-type-options", "clickjacking", "referrer-policy",
@@ -36,6 +36,11 @@ def _json(*argv, headers=None, side_effect=None):
 class ContractTest(unittest.TestCase):
     def test_check_names(self):
         self.assertEqual(runner.ALL_CHECKS, CHECK_NAMES)
+        self.assertEqual(list(checks.NAMES), CHECK_NAMES)
+
+    def test_check_names_are_the_sarif_rule_ids(self):
+        log = json.loads(output.to_sarif([]))
+        self.assertEqual([rule["id"] for rule in log["runs"][0]["tool"]["driver"]["rules"]], CHECK_NAMES)
 
     def test_statuses_and_skipped_prefix(self):
         self.assertEqual((findings.PASS, findings.WARN, findings.FAIL), ("PASS", "WARN", "FAIL"))
@@ -48,6 +53,11 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(set(result["findings"][0]), {"check", "status", "detail"})
         self.assertEqual(code, 1)
 
+    def test_unscanned_target_json_fields(self):
+        code, out = _json("example.com", side_effect=OSError("connection refused"))
+        self.assertEqual(set(json.loads(out)), {"url", "status", "findings", "error"})
+        self.assertEqual(code, 2)
+
     def test_several_targets_json_fields(self):
         _, out = _json("a.example", "b.example")
         self.assertEqual(list(json.loads(out)), ["results"])
@@ -56,6 +66,12 @@ class ContractTest(unittest.TestCase):
         self.assertEqual(_json("example.com", headers={"Strict-Transport-Security": "max-age=31536000"})[0], 0)
         self.assertEqual(_json("example.com")[0], 1)
         self.assertEqual(_json("example.com", side_effect=OSError("connection refused"))[0], 2)
+        # Ctrl-C: 130, the conventional code for an interrupt.
+        with mock.patch.object(runner, "scan", side_effect=KeyboardInterrupt), \
+                mock.patch.object(cli, "exit_now", side_effect=SystemExit) as exit_now, \
+                mock.patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit):
+            cli.main(["example.com"])
+        exit_now.assert_called_once_with(130)
 
     def test_action_inputs_and_outputs(self):
         path = os.path.join(os.path.dirname(__file__), "..", "action.yml")
@@ -68,8 +84,8 @@ class ContractTest(unittest.TestCase):
             return re.findall(r"^  ([a-z-]+):$", body.group(1) if body else "", re.MULTILINE)
 
         self.assertEqual(keys("inputs"), ["targets", "args", "dns", "python-version"])
-        for output in ("score", "grade", "exit-code", "report"):
-            self.assertIn(output, keys("outputs"))
+        for name in ("score", "grade", "exit-code", "report", "sarif"):
+            self.assertIn(name, keys("outputs"))
 
 
 if __name__ == "__main__":
