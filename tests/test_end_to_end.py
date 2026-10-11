@@ -4,7 +4,10 @@ Nothing inside the tool is mocked. Each test starts small HTTP servers on
 127.0.0.1 and runs cli.main on them, so the fetches, the CORS probe, the
 security.txt request, the checks and the output formats are exercised
 together. The DNS and TLS checks need real domains and HTTPS, so the runs
-select the checks that a local plain-HTTP server can answer.
+select the checks that a local plain-HTTP server can answer. HSTS is not one
+of them: browsers ignore it over plain HTTP, so it fails there by design
+(test_hsts_over_plain_http_fails). tests/test_https_end_to_end.py runs the
+same CLI against a local HTTPS server.
 """
 
 import io
@@ -17,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from webposture import cli
 
-LOCAL_CHECKS = "http-status,hsts,csp,x-content-type-options,clickjacking,cookies,cors,security-txt"
+LOCAL_CHECKS = "http-status,csp,x-content-type-options,clickjacking,cookies,cors,security-txt"
 
 
 def _security_txt():
@@ -81,6 +84,23 @@ class _ErrorSite(BaseHTTPRequestHandler):
         pass
 
 
+class _HostileSite(BaseHTTPRequestHandler):
+    """Puts terminal control sequences and Markdown into the values the report quotes."""
+
+    # OSC 52 asks the terminal to put "evil" on the clipboard; CSI 2J clears the screen.
+    SERVER = "nginx/1.25 \x1b]52;c;ZXZpbA==\x07\x1b[2J <img src=https://evil.example/p.png> @octocat"
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Server", self.SERVER)
+        self.send_header("Set-Cookie", "\x1b[31mred=1; Path=/")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+
 class EndToEndTest(unittest.TestCase):
     def _serve(self, handler):
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -109,7 +129,7 @@ class EndToEndTest(unittest.TestCase):
         code, out = self._run(self._serve(_BadSite), "--json")
         statuses = self._statuses(json.loads(out))
         self.assertEqual(statuses["http-status"], "PASS")
-        for check in ("hsts", "csp", "x-content-type-options", "clickjacking"):
+        for check in ("csp", "x-content-type-options", "clickjacking"):
             self.assertEqual(statuses[check], "FAIL", check)
         # Over plain HTTP a missing Secure flag is not a FAIL; HttpOnly and SameSite still warn.
         self.assertEqual(statuses["cookies"], "WARN")
@@ -122,7 +142,7 @@ class EndToEndTest(unittest.TestCase):
         good, bad = self._serve(_GoodSite), self._serve(_BadSite)
         code, out = self._run(good, bad, "--format", "markdown")
         self.assertEqual(out.count("## Web posture report:"), 2)
-        self.assertIn(f"## Web posture report: {good}", out)
+        self.assertIn(f"## Web posture report: `{good}`", out)
         self.assertIn("**Grade A** (100/100)", out)
         self.assertIn("| FAIL | `cors` |", out)
         self.assertEqual(code, 1)
@@ -138,7 +158,7 @@ class EndToEndTest(unittest.TestCase):
         code, out = self._run(self._serve(_ErrorSite), "--json")
         statuses = self._statuses(json.loads(out))
         self.assertEqual(statuses["http-status"], "WARN")
-        self.assertEqual(statuses["hsts"], "FAIL")  # the checks ran on the 503 response
+        self.assertEqual(statuses["csp"], "FAIL")  # the checks ran on the 503 response
         http_status = next(f for f in json.loads(out)["findings"] if f["check"] == "http-status")
         self.assertIn("bot protection", http_status["detail"])
         self.assertEqual(code, 1)
@@ -155,6 +175,35 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(finding["status"], "FAIL")
         self.assertIn(f"{url} is served over plain HTTP", finding["detail"])
         self.assertEqual(code, 1)
+
+    def test_hsts_over_plain_http_fails(self):
+        # The good site sends a valid Strict-Transport-Security header, but over
+        # plain HTTP, where browsers ignore it (RFC 6797 section 8.1).
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = cli.main([self._serve(_GoodSite), "--only", "hsts", "--json", "--retries", "0", "--timeout", "5"])
+        finding = json.loads(out.getvalue())["findings"][0]
+        self.assertEqual((finding["status"], code), ("FAIL", 1))
+        self.assertIn("plain HTTP", finding["detail"])
+
+    def test_a_hostile_site_cannot_drive_the_terminal_or_the_markdown(self):
+        url = self._serve(_HostileSite)
+        for output_format in ("text", "markdown"):
+            out = io.StringIO()
+            with redirect_stdout(out):
+                cli.main([url, "--only", "information-leakage,cookies", "--format", output_format,
+                          "--retries", "0", "--timeout", "5"])
+            report = out.getvalue()
+            self.assertNotIn("\x1b", report, output_format)
+            self.assertNotIn("\x07", report, output_format)
+            self.assertIn("nginx/1.25 \\x1b]52;c;ZXZpbA==\\x07\\x1b[2J <img", report, output_format)
+            self.assertIn("\\x1b[31mred: missing HttpOnly", report, output_format)
+        # In Markdown the quoted text is a code span, shown literally wherever it is rendered.
+        # (http.server sends its own Server header first, with the Python version in it.)
+        row = next(line for line in report.splitlines() if "`information-leakage`" in line)
+        self.assertTrue(row.startswith("| WARN | `information-leakage` | `response discloses the server stack (Server: "), row)
+        self.assertTrue(row.endswith("; Server: nginx/1.25 \\x1b]52;c;ZXZpbA==\\x07\\x1b[2J "
+                                     "<img src=https://evil.example/p.png> @octocat)` |"), row)
 
 
 if __name__ == "__main__":

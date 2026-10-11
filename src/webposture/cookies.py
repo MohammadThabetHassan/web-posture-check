@@ -2,30 +2,53 @@
 
 Takes the raw Set-Cookie header values (a response can carry several, so they
 must not be folded into one) and returns a Finding. No network access.
+
+Cookies are often set on a redirect (a login, or www. to the bare domain), and
+those count too: the fetch collects the Set-Cookie headers of every response in
+the redirect chain, each with the URL that sent it.
 """
 
+from __future__ import annotations
+
+import ipaddress
+import re
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from typing import NamedTuple
+from urllib.parse import urlsplit
 
+from . import publicsuffix
 from .findings import FAIL, PASS, WARN, Finding
 
 _RANK = {PASS: 0, WARN: 1, FAIL: 2}
 
 
-def parse_set_cookie(value):
+class SetCookie(NamedTuple):
+    """One Set-Cookie header value and the response that sent it."""
+
+    value: str
+    # The URL of the response that carried the header; its scheme decides whether Secure is required.
+    url: str
+    # True when that response was a redirect rather than the final page.
+    redirect: bool = False
+
+
+def parse_set_cookie(value: str) -> tuple[str, dict[str, str]]:
     """Return (name, attributes) where attributes maps lower-cased names to values."""
-    parts = [p.strip() for p in value.split(";")]
-    name = parts[0].split("=", 1)[0].strip()
+    # RFC 6265 section 5.2 trims only spaces and tabs (WSP); "Secure\xa0" is not Secure.
+    parts = [p.strip(" \t") for p in value.split(";")]
+    name = parts[0].split("=", 1)[0].strip(" \t")
     attributes = {}
     for part in parts[1:]:
         if not part:
             continue
         key, _, attr_value = part.partition("=")
-        attributes[key.strip().lower()] = attr_value.strip()
+        attributes[key.strip(" \t").lower()] = attr_value.strip(" \t")
     return name, attributes
 
 
-def _prefix_violations(name, attributes):
+def _prefix_violations(name: str, attributes: dict[str, str]) -> list[str]:
     """Return the rules a __Host- or __Secure- cookie breaks, or [] if none.
 
     Browsers drop such cookies outright, so a broken prefix means the cookie
@@ -48,7 +71,7 @@ def _prefix_violations(name, attributes):
     return violations
 
 
-def _problems(name, attributes, is_https):
+def _problems(name: str, attributes: dict[str, str], is_https: bool) -> list[tuple[str, str]]:
     """Return a list of (status, message) for one cookie."""
     problems = []
     samesite = attributes.get("samesite")
@@ -69,18 +92,16 @@ def _problems(name, attributes, is_https):
     return problems
 
 
-def is_deletion(attributes, now):
+def is_deletion(attributes: dict[str, str], now: datetime) -> bool:
     """True when the Set-Cookie only removes a cookie (Max-Age <= 0 or Expires in the past).
 
     Sites clear cookies this way, often without repeating the flags, and the
     browser discards the cookie, so there is nothing to protect.
     Max-Age takes precedence over Expires (RFC 6265, section 5.3).
     """
-    if "max-age" in attributes:
-        try:
-            return int(attributes["max-age"]) <= 0
-        except ValueError:
-            pass
+    # A Max-Age that is not a whole number (optionally signed, as Chrome accepts "+0") is ignored.
+    if re.fullmatch(r"[+-]?[0-9]+", attributes.get("max-age", "")):
+        return int(attributes["max-age"]) <= 0
     if "expires" in attributes:
         try:
             expires = parsedate_to_datetime(attributes["expires"])
@@ -92,24 +113,151 @@ def is_deletion(attributes, now):
     return False
 
 
-def check_cookies(set_cookie_values, is_https, now=None):
+def _default_path(url: str) -> str:
+    """RFC 6265 section 5.1.4: the directory of the request path (/account/login -> /account)."""
+    path = urlsplit(url).path
+    if not path.startswith("/") or path.count("/") == 1:
+        return "/"
+    return path[:path.rindex("/")]
+
+
+def _is_ip(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
+
+
+def _domain_match(host: str, domain: str) -> bool:
+    """RFC 6265 section 5.1.3: host is domain, or a name under it (never for an IP address)."""
+    return host == domain or (host.endswith("." + domain) and not _is_ip(host))
+
+
+def secure_origin(url: str) -> bool:
+    """Whether browsers treat url as a secure origin for Secure cookies: https://, or a loopback host
+    (localhost, *.localhost, 127.0.0.0/8, ::1), which Chrome and Firefox trust over plain HTTP too."""
+    parts = urlsplit(url)
+    host = (parts.hostname or "").rstrip(".")
+    if parts.scheme == "https" or host == "localhost" or host.endswith(".localhost"):
+        return True
+    return _is_ip(host) and ipaddress.ip_address(host).is_loopback
+
+
+def _path_match(path: str, cookie_path: str) -> bool:
+    """RFC 6265 section 5.1.4."""
+    return path == cookie_path or (path.startswith(cookie_path) and (cookie_path.endswith("/") or path[len(cookie_path)] == "/"))
+
+
+def cookie_key(name: str, attributes: dict[str, str], url: str = "") -> tuple[str, str, bool, str] | None:
+    """How a browser's cookie store identifies a cookie: (name, domain, host-only, path).
+
+    The domain is the Domain attribute (lower case, one leading dot removed),
+    or else the host that set the cookie, which makes it host-only. The path is
+    the Path attribute if it starts with "/", or else the default path of the URL
+    that set it (RFC 6265 sections 5.2.3, 5.2.4 and 5.3; host-only is part of
+    the identity in RFC 6265bis and in browsers). url is "" when unknown.
+
+    None when the browser rejects the cookie because its Domain does not cover
+    the host that set it (section 5.3, step 6). As in Chrome, an IP address (an
+    IPv6 one in brackets) and a public suffix such as com, co.uk or github.io may
+    only name the host itself, which makes the cookie host-only (step 5, with the
+    Public Suffix List; checked in Chromium and Firefox). Hosts and domains are
+    compared in their ASCII (IDNA) form, and "Domain=." is rejected.
+    """
+    raw_domain = attributes.get("domain", "")
+    if raw_domain == ".":
+        return None
+    domain = publicsuffix.to_ascii(raw_domain)
+    domain = domain[1:] if domain.startswith(".") else domain
+    host = publicsuffix.to_ascii(urlsplit(url).hostname or "") if url else ""
+    if domain and host:
+        if _is_ip(host):
+            if domain != (f"[{host}]" if ":" in host else host):
+                return None
+            domain = ""
+        elif publicsuffix.is_public_suffix(domain):
+            if domain != host:
+                return None
+            domain = ""
+        elif not _domain_match(host, domain) or publicsuffix.registrable_domain(domain) != publicsuffix.registrable_domain(host):
+            # A Domain above the host's registrable domain is refused too (Chromium compares
+            # registrable domains): amazonaws.com from bucket.s3.amazonaws.com.
+            return None
+    path = attributes.get("path", "")
+    if not path.startswith("/"):
+        path = _default_path(url) if url else "/"
+    return name, domain or host, not domain, path
+
+
+def _overwrites_secure(key: tuple[str, str, bool, str], jar: dict[tuple[str, str, bool, str], tuple[str, dict[str, str], bool, str | None]],
+                       now: datetime) -> bool:
+    """True when a cookie from plain HTTP would replace a live Secure cookie (RFC 6265bis, section 5.7)."""
+    name, domain, _, path = key
+    for (other_name, other_domain, _, other_path), (_, attributes, _, _) in jar.items():
+        if (other_name == name and "secure" in attributes and not is_deletion(attributes, now)
+                and (_domain_match(domain, other_domain) or _domain_match(other_domain, domain))
+                and _path_match(path, other_path)):
+            return True
+    return False
+
+
+def _refused_for_its_flags(name: str, attributes: dict[str, str]) -> bool:
+    """A broken __Host- or __Secure- prefix, or SameSite=None without Secure: browsers refuse the Set-Cookie."""
+    samesite = attributes.get("samesite", "").lower()
+    return bool(_prefix_violations(name, attributes)) or (samesite == "none" and "secure" not in attributes)
+
+
+def check_cookies(set_cookies: Sequence[str | SetCookie], is_https: bool, now: datetime | None = None) -> Finding:
+    """Check every cookie the response chain leaves in the browser.
+
+    set_cookies are SetCookie entries, or plain Set-Cookie values sent by the
+    final response, whose scheme is_https gives. A later Set-Cookie for the same
+    cookie (cookie_key) replaces an earlier one, as in a browser's cookie store
+    (RFC 6265 section 5.3, step 11), so a cookie set on a redirect and deleted or
+    re-set by the final page is judged by its last version, while a cookie of the
+    same name set by another host or for another path is a cookie of its own.
+
+    A Set-Cookie the browser rejects changes nothing: a Domain that does not
+    cover the host that sent it, a Secure cookie sent over plain HTTP, a cookie
+    from plain HTTP that would overlay a Secure one (RFC 6265bis; plain HTTP to a
+    loopback host counts as secure, as in browsers), or one refused for its flags
+    (a broken prefix, SameSite=None without Secure). The last kind is still
+    reported, as a FAIL, unless a later valid Set-Cookie replaces it.
+    """
     now = now or datetime.now(timezone.utc)
-    live = []
-    for value in set_cookie_values:
+    jar: dict[tuple[str, str, bool, str], tuple[str, dict[str, str], bool, str | None]] = {}
+    refused: dict[tuple[str, str, bool, str], tuple[str, dict[str, str], bool, str | None]] = {}
+    for item in set_cookies:
+        if isinstance(item, SetCookie):
+            value, url, https, via = item.value, item.url, urlsplit(item.url).scheme == "https", item.url if item.redirect else None
+            trusted = secure_origin(item.url)
+        else:
+            value, url, https, via, trusted = item, "", is_https, None, is_https
         name, attributes = parse_set_cookie(value)
-        if not is_deletion(attributes, now):
-            live.append((name, attributes))
-    ignored = len(set_cookie_values) - len(live)
-    suffix = f" ({ignored} deletion(s) ignored)" if ignored else ""
+        key = cookie_key(name, attributes, url)
+        if key is None or (not trusted and ("secure" in attributes or _overwrites_secure(key, jar, now))):
+            continue
+        if _refused_for_its_flags(name, attributes):
+            if not is_deletion(attributes, now):
+                refused[key] = (name, attributes, https, via)
+            continue
+        refused.pop(key, None)
+        jar.pop(key, None)  # keep the report in the order of the last write
+        jar[key] = (name, attributes, https, via)
+    deletions = sum(1 for entry in jar.values() if is_deletion(entry[1], now))
+    live = [entry for entry in jar.values() if not is_deletion(entry[1], now)] + list(refused.values())
+    suffix = f" ({deletions} deletion(s) ignored)" if deletions else ""
     if not live:
         return Finding("cookies", PASS, "no cookies set" + suffix)
     status = PASS
     notes = []
-    for name, attributes in live:
-        problems = _problems(name, attributes, is_https)
+    for name, attributes, https, via in live:
+        problems = _problems(name, attributes, https)
         if problems:
-            notes.append(f"{name}: " + ", ".join(msg for _, msg in problems))
-            status = max([status] + [s for s, _ in problems], key=_RANK.get)
+            label = f"{name} (set by the redirect at {via})" if via else name
+            notes.append(f"{label}: " + ", ".join(msg for _, msg in problems))
+            status = max([status] + [s for s, _ in problems], key=lambda s: _RANK[s])
     if not notes:
         return Finding("cookies", PASS, f"{len(live)} cookie(s), no flag problems found" + suffix)
     return Finding("cookies", status, "; ".join(notes))

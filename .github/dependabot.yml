@@ -1,11 +1,18 @@
 # Keep the pinned GitHub Actions and the Python tooling up to date.
+# A new release waits a week before it is proposed, so a compromised or
+# broken version is usually caught and pulled before it reaches this repository
+# (security updates are not delayed).
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
   - package-ecosystem: pip
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7

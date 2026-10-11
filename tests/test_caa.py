@@ -59,7 +59,7 @@ class LookupCaaTest(unittest.TestCase):
         with mock.patch.dict(sys.modules, blocked):
             found_on, _records, problem = caa.lookup_caa("example.com", 5)
         self.assertIsNone(found_on)
-        self.assertIn("web-posture-check[dns]", problem)
+        self.assertIn("web-posture-check[dns]", str(problem))
 
     @unittest.skipUnless(HAVE_DNSPYTHON, "needs the optional dns extra")
     def test_climbs_to_parent_when_host_has_no_caa(self):
@@ -82,6 +82,27 @@ class LookupCaaTest(unittest.TestCase):
         self.assertEqual(found_on, "example.com")
         self.assertEqual(records, [(0, "issue", "letsencrypt.org")])
 
+
+    def test_candidates_climb_to_the_top_level_domain(self):
+        # RFC 8659 section 3: the climb stops at the root, so the TLD is checked too.
+        self.assertEqual(caa.caa_candidates("www.example.com."), ["www.example.com", "example.com", "com"])
+        self.assertEqual(caa.caa_candidates("example.com"), ["example.com", "com"])
+
+    @unittest.skipUnless(HAVE_DNSPYTHON, "needs the optional dns extra")
+    def test_a_record_on_the_tld_applies(self):
+        import dns.resolver
+
+        class _Caa:
+            def __init__(self, flags, tag, value):
+                self.flags, self.tag, self.value = flags, tag, value
+
+        def fake_resolve(name, rdtype, lifetime=None):
+            if name == "com":
+                return [_Caa(0, b"issue", b"ca.example")]
+            raise dns.resolver.NoAnswer()
+
+        with mock.patch("dns.resolver.resolve", side_effect=fake_resolve):
+            self.assertEqual(caa.lookup_caa("www.example.com", 5), ("com", [(0, "issue", "ca.example")], None))
 
 if __name__ == "__main__":
     unittest.main()

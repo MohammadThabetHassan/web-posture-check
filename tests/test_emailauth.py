@@ -65,8 +65,8 @@ class LookupTxtTest(unittest.TestCase):
         blocked = {"dns": None, "dns.resolver": None, "dns.exception": None}
         with mock.patch.dict(sys.modules, blocked):
             txt, problem = emailauth.lookup_txt("example.com", 5)
-        self.assertIsNone(txt)
-        self.assertIn("web-posture-check[dns]", problem)
+        self.assertEqual(txt, [])
+        self.assertIn("web-posture-check[dns]", str(problem))
 
     @unittest.skipUnless(HAVE_DNSPYTHON, "needs the optional dns extra")
     def test_split_txt_strings_are_joined_without_spaces(self):
@@ -123,6 +123,9 @@ class DmarcTest(unittest.TestCase):
 
 
 class DkimTest(unittest.TestCase):
+    def test_dmarc_parts_without_a_value_are_ignored(self):
+        self.assertEqual(emailauth.parse_dmarc_tags("v=DMARC1; p=reject; junk; ;"), {"v": "DMARC1", "p": "reject"})
+
     def test_parse_key_ignores_non_dkim_txt(self):
         self.assertIsNone(emailauth.parse_dkim_key(["google-site-verification=abc"]))
         self.assertEqual(emailauth.parse_dkim_key(["v=DKIM1; k=rsa; p=MIGf MA0"]), "MIGfMA0")
@@ -152,6 +155,132 @@ class DkimTest(unittest.TestCase):
     def test_explicit_selector_found_passes(self):
         self.assertEqual(emailauth.check_dkim("example.com", {"mysel": "MIIB"}, explicit=True).status, PASS)
 
+
+
+class SpfLookupLimitTest(unittest.TestCase):
+    """RFC 7208 section 4.6.4: more than 10 DNS-querying terms make SPF a permerror."""
+
+    def _lookup(self, records):
+        def lookup(name):
+            if name == "broken.example":
+                return [], "DNS lookup for broken.example failed: Timeout"
+            return records.get(name, []), None
+        return lookup
+
+    def _check(self, record, records=None):
+        return emailauth.check_spf("example.com", [record], lookup=self._lookup(records or {}))
+
+    def test_ten_lookups_pass_and_eleven_fail(self):
+        ten = "v=spf1 a mx ptr exists:e.example a:x.example a:w.example mx:y.example/24 a/24 mx/24 include:i.example ip4:192.0.2.1 -all"
+        f = self._check(ten, {"i.example": ["v=spf1 ip6:2001:db8::1 -all"]})
+        self.assertEqual(f.status, PASS)
+        self.assertIn("(10 of 10 DNS lookups)", f.detail)
+        f = self._check(ten.replace("-all", "exists:z.example -all"), {"i.example": ["v=spf1 -all"]})
+        self.assertEqual(f.status, FAIL)
+        self.assertIn("more than 10 DNS lookups", f.detail)
+
+    def test_included_records_count(self):
+        records = {f"i{n}.example": [f"v=spf1 include:i{n + 1}.example a ~all"] for n in range(6)}
+        f = self._check("v=spf1 include:i0.example -all", records)
+        self.assertEqual(f.status, FAIL)
+
+    def test_a_loop_runs_into_the_limit(self):
+        f = self._check("v=spf1 include:loop.example -all", {"loop.example": ["v=spf1 include:loop.example -all"]})
+        self.assertEqual(f.status, FAIL)
+        self.assertIn("more than 10", f.detail)
+
+    def test_redirect_counts_only_without_all(self):
+        records = {"r.example": ["v=spf1 a -all"]}
+        self.assertIn("(2 of 10 DNS lookups)", self._check("v=spf1 redirect=r.example", records).detail)
+        self.assertNotIn("DNS lookups", self._check("v=spf1 -all redirect=r.example", records).detail)
+        self.assertNotIn("DNS lookups", self._check("v=spf1 ip4:192.0.2.0/24 exp=explain.example -all").detail)
+
+    def test_an_include_without_one_spf_record_is_a_permerror(self):
+        f = self._check("v=spf1 include:none.example -all")
+        self.assertEqual(f.status, FAIL)
+        self.assertIn("includes none.example (no SPF record)", f.detail)
+        f = self._check("v=spf1 include:two.example -all", {"two.example": ["v=spf1 -all", "v=spf1 ~all"]})
+        self.assertIn("includes two.example (2 SPF records)", f.detail)
+
+    def test_a_failed_lookup_means_the_limit_was_not_verified(self):
+        f = self._check("v=spf1 include:broken.example -all")
+        self.assertEqual(f.status, WARN)
+        self.assertIn("the 10-lookup limit could not be checked: DNS lookup for broken.example failed", f.detail)
+        # A finding that already warns keeps its own status.
+        self.assertEqual(self._check("v=spf1 include:broken.example ?all").status, WARN)
+
+    def test_a_macro_include_is_counted_once_as_a_lower_bound(self):
+        f = self._check("v=spf1 include:%{i}._ip.%{d}._spf.example -all")
+        self.assertEqual(f.status, PASS)
+        self.assertIn("(at least 1 of 10 DNS lookups)", f.detail)
+
+    def test_terms_after_all_are_ignored(self):
+        # RFC 7208 section 5.1: they are never evaluated, so they neither count nor get looked up.
+        f = self._check("v=spf1 ip4:192.0.2.1 -all include:gone.example")
+        self.assertEqual((f.status, f.detail), (PASS, "example.com: v=spf1 ip4:192.0.2.1 -all include:gone.example"))
+        many = " ".join(f"include:i{n}.example" for n in range(12))
+        self.assertEqual(self._check(f"v=spf1 a -all {many}", {f"i{n}.example": ["v=spf1 -all"] for n in range(12)}).status, PASS)
+
+    def test_a_redirect_without_one_spf_record_says_redirect(self):
+        f = self._check("v=spf1 redirect=none.example")
+        self.assertEqual(f.status, FAIL)
+        self.assertIn("redirects to none.example (no SPF record)", f.detail)
+
+    def test_a_repeated_redirect_or_exp_is_a_permerror(self):
+        for record in ("v=spf1 redirect=a.example redirect=b.example", "v=spf1 -all exp=a.example exp=b.example"):
+            f = emailauth.check_spf("example.com", [record])
+            self.assertEqual(f.status, FAIL, record)
+            self.assertIn("repeats a redirect= or exp= modifier", f.detail)
+
+    def test_a_record_that_already_fails_is_not_counted(self):
+        f = self._check("v=spf1 include:i.example +all")
+        self.assertEqual(f.status, FAIL)
+        self.assertIn("authorises every server", f.detail)
+
+
+class DmarcCandidatesTest(unittest.TestCase):
+    def test_the_walk_stops_at_the_organizational_domain(self):
+        self.assertEqual(emailauth.dmarc_candidates("shop.example.co.uk"), ["shop.example.co.uk", "example.co.uk"])
+        self.assertEqual(emailauth.dmarc_candidates("a.b.example.com"), ["a.b.example.com", "b.example.com", "example.com"])
+        self.assertEqual(emailauth.dmarc_candidates("example.com"), ["example.com"])
+        self.assertEqual(emailauth.dmarc_candidates("user.github.io"), ["user.github.io"])
+        # A public suffix is asked only when it is the domain itself.
+        self.assertEqual(emailauth.dmarc_candidates("co.uk"), ["co.uk"])
+
+
+class DmarcSubdomainPolicyTest(unittest.TestCase):
+    """RFC 7489 section 6.3: a subdomain inherits sp= from its organizational domain, else p=."""
+
+    def test_sp_applies_to_a_subdomain(self):
+        f = emailauth.check_dmarc("example.com", ["v=DMARC1; p=reject; sp=none"], domain="shop.example.com")
+        self.assertEqual(f.status, WARN)
+        self.assertIn("sp=none (the policy shop.example.com inherits as a subdomain)", f.detail)
+
+    def test_strict_sp_passes_a_subdomain_even_with_a_lax_p(self):
+        f = emailauth.check_dmarc("example.com", ["v=DMARC1; p=none; sp=reject"], domain="shop.example.com")
+        self.assertEqual(f.status, PASS)
+        self.assertIn("sp=reject applies to shop.example.com", f.detail)
+
+    def test_p_applies_to_a_subdomain_without_sp(self):
+        f = emailauth.check_dmarc("example.com", ["v=DMARC1; p=quarantine"], domain="shop.example.com")
+        self.assertEqual(f.status, PASS)
+        self.assertIn("p=quarantine applies to shop.example.com", f.detail)
+
+    def test_the_domain_itself_uses_p(self):
+        f = emailauth.check_dmarc("example.com", ["v=DMARC1; p=reject; sp=none"], domain="example.com")
+        self.assertEqual(f.status, PASS)
+
+    def test_invalid_sp_is_treated_as_p_none(self):
+        f = emailauth.check_dmarc("example.com", ["v=DMARC1; p=reject; sp=strict"], domain="shop.example.com")
+        self.assertEqual(f.status, WARN)
+        self.assertIn("not a valid policy", f.detail)
+
+    def test_invalid_sp_spoils_the_record_for_the_domain_itself_too(self):
+        # Section 6.6.3 step 6 applies to the whole record, not only to subdomains.
+        for domain in ("example.com", None):
+            f = emailauth.check_dmarc("example.com", ["v=DMARC1; p=reject; sp=bogus"], domain=domain)
+            self.assertEqual(f.status, WARN, domain)
+            self.assertIn("sp='bogus' is not a valid policy, so receivers treat the record as p=none", f.detail)
 
 if __name__ == "__main__":
     unittest.main()
