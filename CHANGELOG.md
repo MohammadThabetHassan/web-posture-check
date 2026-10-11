@@ -8,19 +8,49 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 
 - SARIF 2.1.0 output for GitHub code scanning: `--format sarif`, and `--sarif FILE` to write a SARIF log next to the normal report from the same scan. FAIL is an error, WARN a warning; alerts keep one identity per check and URL across runs. `--sarif-location PATH` points every result at a repository file.
 - The GitHub Action always writes a SARIF log, anchored to the workflow file that runs it, and has a `sarif` output for `github/codeql-action/upload-sarif`. CI uploads it to code scanning and validates it against the OASIS SARIF schema.
-- mypy type checking in CI, of every function body including the tests.
-- Branch coverage in CI, with a 97% minimum (99% today) and the coverage table in each job summary.
+- The package is fully annotated, checked with mypy's strict options, and ships `py.typed` (PEP 561) for projects that import it. Tests are type-checked inside every function.
+- CI runs the tests on Python 3.9 to 3.15 on Linux and on Windows and macOS, with branch coverage (99% minimum, 100% today, the table in each job summary), and installs the built wheel into clean environments with and without the `[dns]` extra.
+- `tests/offline.py` runs the suite with only loopback reachable, and fails it if any test tries to reach the network, even when the code under test catches the error. CI and the release workflow run the tests this way.
 - CodeQL analysis of the Python code and the workflows.
-- `tests/test_tls_live.py`: the certificate fetch and the TLS 1.0/1.1 probes against a real local TLS server with a throwaway CA, and `tests/test_runner.py` for lookup failures.
-
-### Fixed
-
-- A server whose certificate has no expiry date is reported as untrusted instead of crashing the certificate check.
-- The TLS 1.0/1.1 probe no longer emits a `DeprecationWarning` when it asks for those versions.
+- Tests against real local servers: `tests/test_https_end_to_end.py` runs the CLI over HTTPS with a throwaway CA, and `tests/test_tls_live.py` runs the certificate fetch and the TLS 1.0/1.1 probes.
 
 ### Changed
 
-- Every action in the CI workflows is pinned to a commit SHA.
+- Markdown reports write the URL and each detail as code spans, so text a site sends is shown literally (see Security).
+- A target that could not be scanned is part of the JSON report, in input order, with `"status": null`, `"findings": []` and an `"error"`, and of the Markdown report, with an **Error:** line. With one target, `--json` used to print nothing at all.
+- With `--insecure`, a target that cannot be fetched even without certificate verification exits 2, like any target that could not be scanned (it exited 1).
+- The DNS checks are reported as skipped for an IP address or a single-label host such as `localhost`, which have no domain to look up.
+- `--sarif-location` without `--sarif` or `--format sarif` is a usage error instead of being ignored, and its path is written as a relative URI (`/` separators, spaces and `%` encoded).
+- The report is written before the SARIF log, and both are always attempted.
+- The release workflow runs the test suite before it builds. Every action in the workflows is pinned to a commit SHA, no checkout keeps the job's token (`persist-credentials: false`), pull request runs cancel the run they replace, and Dependabot proposes a release only after it has been out for seven days.
+- For code that imports `webposture`: `runner.scan(target, ScanOptions)` returns `(result, exit code)`, and a result carries an `error` when the target could not be scanned; `checks.py` lists every check; `emailauth.lookup_txt` returns `([], reason)` on failure.
+
+### Fixed
+
+Checks that passed, or judged the wrong value, when a header was repeated, listed or unusual. Each now reads the header as browsers do:
+
+- `hsts`: only the first header counts (RFC 6797). `max-age=0`, which tells browsers to stop enforcing HTTPS, and a repeated directive, which makes browsers ignore the header, now fail. So does a header received over plain HTTP, where browsers ignore it.
+- `csp`: every header and every comma-separated policy is enforced, so a weakness counts only when every policy that restricts scripts has it. An empty policy fails, a policy without `script-src` or `default-src` warns (it passed), and `'strict-dynamic'` also turns off `'unsafe-inline'`.
+- `clickjacking`: a `frame-ancestors` that allows any site (`*`, a bare scheme such as `https:`, or `https://*`) fails, even with `X-Frame-Options: DENY`, which browsers then ignore (it passed). Repeated `X-Frame-Options` values follow the HTML standard.
+- `referrer-policy`: the last recognised value of a list applies, so `unsafe-url, strict-origin` is judged as `strict-origin`. `no-referrer-when-downgrade` and unrecognised values warn.
+- `x-content-type-options`: the first value decides (Fetch standard). `permissions-policy`: an empty header warns. `information-leakage`: every `Server` header is checked. `cors`: repeated headers are combined, so `x, x` does not count as the probe origin.
+- `cookies`: cookies set by redirects on the way to the final page are checked too, each against the scheme of the response that set it, and the last version of a cookie counts. They were not checked at all.
+- `dmarc`: a subdomain that inherits its parent's record is judged by `sp=`, so `p=reject; sp=none` no longer passes for `mail.example.com`.
+- `caa`: the lookup climbs to the top-level domain, as certificate authorities do (RFC 8659).
+- `https-redirect`: a redirect to another `http://` URL or to a scheme other than `https://` is named as such.
+- A target with spaces, control characters, credentials, an invalid port or host name, or a scheme other than `http(s)` is that target's error (exit 2) instead of a crash or a request. So is a response that is not HTTP, which crashed the run, and a redirect loop, which was graded as if its last redirect were the page. Any unexpected exception while scanning one target is that target's error too; the other targets are still reported.
+- `--timeout` must be a number of seconds above 0: `0` made every request fail, and negative numbers, `nan` and `inf` crashed the run.
+- Ctrl-C exits at once with code 130 instead of waiting for running scans, and a closed pipe (`| head`) ends quietly instead of with a traceback.
+- Error pages and failed redirects no longer leave their connection open until garbage collection.
+- A `--sarif` file that cannot be written no longer stops the report from being written.
+- A server whose certificate has no expiry date is reported as untrusted instead of crashing the certificate check.
+- The TLS 1.0/1.1 probe no longer emits a `DeprecationWarning` when it asks for those versions.
+
+### Security
+
+- Terminal injection: a site could put escape sequences in a header (for example OSC 52, which sets the clipboard of whoever runs the scan, or sequences that clear or rewrite the screen) and the text report printed them as they were. Text output and error messages now show control characters and bidirectional overrides as visible escapes such as `\x1b`.
+- Markdown injection: a site's text could add links, images, HTML, @mentions and issue references to a report rendered in a job summary, issue or pull request. Backslash escapes are not enough on GitHub, so the text is now in code spans. The Action reads its grade only from the report's summary lines, so a site cannot add one.
+- Only HTTP and HTTPS are ever requested. A redirect to `ftp://` made the tool connect to whatever host and port the site named; it is now refused, like a redirect to any other scheme. A target such as `file:///etc/hostname` was read from the local disk; a target with a scheme other than `http(s)` is now rejected.
 
 ## [0.3.0] - 2026-10-10
 
