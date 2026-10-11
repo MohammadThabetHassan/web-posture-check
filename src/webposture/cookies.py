@@ -180,7 +180,9 @@ def cookie_key(name: str, attributes: dict[str, str], url: str = "") -> tuple[st
             if domain != host:
                 return None
             domain = ""
-        elif not _domain_match(host, domain):
+        elif not _domain_match(host, domain) or publicsuffix.registrable_domain(domain) != publicsuffix.registrable_domain(host):
+            # A Domain above the host's registrable domain is refused too (Chromium compares
+            # registrable domains): amazonaws.com from bucket.s3.amazonaws.com.
             return None
     path = attributes.get("path", "")
     if not path.startswith("/"):

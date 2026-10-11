@@ -327,6 +327,16 @@ class BrowserStoreRulesTest(unittest.TestCase):
         # The host itself may name its own public suffix; the cookie is then host-only (Chromium and Firefox).
         self.assertEqual(key("a", {"domain": "github.io"}, "https://github.io/"), ("a", "github.io", True, "/"))
 
+    def test_a_domain_above_the_hosts_registrable_domain_is_refused(self):
+        # As in Chromium, Firefox and WebKit: amazonaws.com is above bucket.s3.amazonaws.com's
+        # registrable domain, and kawasaki.jp (under the wildcard rule *.kawasaki.jp) is a suffix.
+        key = cookies.cookie_key
+        self.assertIsNone(key("a", {"domain": "amazonaws.com"}, "https://bucket.s3.amazonaws.com/"))
+        self.assertIsNone(key("a", {"domain": "amazonaws.com"}, "https://s3.amazonaws.com/"))
+        self.assertIsNone(key("a", {"domain": "kawasaki.jp"}, "https://www.foo.kawasaki.jp/"))
+        self.assertEqual(key("a", {"domain": "kawasaki.jp"}, "https://kawasaki.jp/"), ("a", "kawasaki.jp", True, "/"))
+        self.assertEqual(key("a", {"domain": "example.com"}, "https://a.b.example.com/"), ("a", "example.com", False, "/"))
+
     def test_plain_http_cannot_overlay_a_secure_cookie_in_either_domain_direction(self):
         # RFC 6265bis 5.7: blocked when either domain covers the other, for the same name and an overlapping path.
         secure_host = ("sid=1; Secure; Path=/; HttpOnly; SameSite=Lax", "https://a.site.example/", True)
