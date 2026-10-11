@@ -351,12 +351,25 @@ class HstsStandardTest(unittest.TestCase):
         self.assertEqual(f.status, FAIL)
         self.assertIn("includeSubDomains takes no value", f.detail)
 
-    def test_directive_names_and_values_must_follow_the_grammar(self):
+    def test_an_unknown_directive_outside_the_grammar_is_a_warning(self):
+        # Chromium skips a directive it does not know, so the header still works there;
+        # a parser that follows the RFC grammar (Firefox's) drops the whole header.
         for value in ("max-age=31536000; include Sub Domains", 'max-age=31536000; x="unterminated',
-                      "max-age=31536000; x=", "max-age=31536000; x=a b", "max-age=31536000; (x)"):
+                      "max-age=31536000; x=", "max-age=31536000; x=a b", "max-age=31536000; (x)",
+                      "max-age=31536000; report-uri=https://r.example/x"):
+            f = headers.check_hsts({"Strict-Transport-Security": value})
+            self.assertEqual(f.status, WARN, value)
+            self.assertIn("outside the RFC 6797 grammar", f.detail, value)
+            self.assertIn("Chromium-based browsers apply it", f.detail, value)
+
+    def test_a_malformed_max_age_or_include_subdomains_is_ignored_by_every_browser(self):
+        for value in ("max-age=1 2", "max-age=31536000; includeSubDomains=true", "max-age=(1)"):
             f = headers.check_hsts({"Strict-Transport-Security": value})
             self.assertEqual(f.status, FAIL, value)
-            self.assertIn("is not valid", f.detail, value)
+            self.assertIn("so browsers ignore it", f.detail, value)
+        # A header that is invalid either way keeps its FAIL.
+        f = headers.check_hsts({"Strict-Transport-Security": "max-age=0; x=a b"})
+        self.assertEqual(f.status, FAIL)
         # A quoted value may contain ";" (the grammar's quoted-string).
         for value in ('max-age=31536000; x="a; b"', 'max-age="31536000"; x="a \\" b"'):
             self.assertEqual(headers.check_hsts({"Strict-Transport-Security": value}).status, PASS, value)
@@ -444,10 +457,56 @@ class HttpWhitespaceTest(unittest.TestCase):
         self.assertIn("COOP=unset, CORP=same-site", f.detail)
         self.assertNotIn("not recognised", f.detail)
 
-    def test_repeated_x_xss_protection_is_not_valid(self):
+    def test_x_xss_protection_is_decided_by_its_first_character(self):
+        # Blink and WebKit read only the first character of the combined value.
         f = headers.check_x_xss_protection(HeaderMap([("X-XSS-Protection", "0"), ("X-XSS-Protection", "0")]))
+        self.assertEqual((f.status, f.detail), (PASS, "0 (legacy XSS auditor disabled) (sent as '0, 0')"))
+        self.assertEqual(headers.check_x_xss_protection({"X-XSS-Protection": "1, 0"}).status, WARN)
+        self.assertIn("not a valid value", headers.check_x_xss_protection({"X-XSS-Protection": "on"}).detail)
+
+    def test_cross_origin_policy_values_are_case_sensitive(self):
+        # Chrome: Same-Origin / Require-Corp do not make the page cross-origin isolated.
+        f = headers.check_cross_origin_isolation({"Cross-Origin-Opener-Policy": "Same-Origin",
+                                                  "Cross-Origin-Resource-Policy": "same-origin",
+                                                  "Cross-Origin-Embedder-Policy": "Require-Corp"})
         self.assertEqual(f.status, WARN)
-        self.assertIn("'0, 0' is not a valid value", f.detail)
+        self.assertIn("Cross-Origin-Opener-Policy value 'Same-Origin' is not recognised", f.detail)
+        self.assertNotIn("cross-origin isolated", f.detail)
+
+
+class CspParsingTest(unittest.TestCase):
+    """CSP3 section 2.2.1: only ASCII whitespace separates sources, and browsers drop a directive with any other character."""
+
+    def test_a_directive_with_a_non_ascii_character_is_dropped(self):
+        # A no-break space (byte 0xA0, often pasted in) is not ASCII whitespace: Chrome drops
+        # script-src, so default-src governs scripts.
+        f = headers.check_csp({"Content-Security-Policy": "default-src * 'unsafe-inline'; script-src 'self'\xa0'nonce-abc'"})
+        self.assertEqual(f.status, WARN)
+        self.assertIn("default-src allows 'unsafe-inline'", f.detail)
+
+    def test_a_directive_with_a_control_character_is_dropped(self):
+        f = headers.check_csp({"Content-Security-Policy": "script-src * 'unsafe-inline'\x1f'strict-dynamic'"})
+        self.assertEqual(f.status, FAIL)
+        self.assertIn("has no directive browsers accept", f.detail)
+        f = headers.check_csp({"Content-Security-Policy": "frame-ancestors 'none'; script-src * 'unsafe-inline'\x1f'strict-dynamic'"})
+        self.assertEqual(f.status, WARN)
+        self.assertIn("does not restrict scripts", f.detail)
+
+    def test_ascii_whitespace_separates_sources(self):
+        # Tab and form feed are ASCII whitespace; vertical tab is not.
+        self.assertEqual(headers.check_csp({"Content-Security-Policy": "script-src\t'self'\x0c'nonce-abc123'"}).status, PASS)
+        f = headers.check_csp({"Content-Security-Policy": "default-src *; script-src 'self'\x0b'nonce-abc123'"})
+        self.assertIn("default-src allows scripts from any host", f.detail)
+
+    def test_a_dropped_frame_ancestors_protects_nothing(self):
+        self.assertEqual(headers.check_framing({"Content-Security-Policy": "frame-ancestors 'none'\xa0"}).status, FAIL)
+
+    def test_a_wildcard_right_under_a_top_level_domain_is_any_host(self):
+        # Anyone can register a name under .com.
+        for source in ("https://*.com", "*.net"):
+            f = headers.check_csp({"Content-Security-Policy": f"script-src 'self' {source}"})
+            self.assertEqual(f.status, WARN, source)
+            self.assertIn(f"({source})", f.detail)
 
 
 class CspScriptModelTest(unittest.TestCase):

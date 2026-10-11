@@ -26,9 +26,10 @@ HSTS_PRELOAD_MIN_MAX_AGE = 31536000
 # unfilled template placeholder, is not a nonce, so it switches nothing off.
 _NONCE_OR_HASH = re.compile(r"'(?:nonce|sha256|sha384|sha512)-[a-z0-9+/_-]+={0,2}'")
 
-# A host-source whose host is "*", with any scheme, port and path (CSP3 section
-# 2.3.1): https://*, *:443, *:*, http://*/js/. It matches every host.
-_ANY_HOST_SOURCE = re.compile(r"(?:(?P<scheme>[a-z][a-z0-9+.-]*)://)?\*(?::(?:[0-9]+|\*))?(?:/.*)?")
+# A host-source whose host is "*", or a wildcard right under a top-level domain
+# (*.com, where anyone can register a name), with any scheme, port and path
+# (CSP3 section 2.3.1): https://*, *:443, *:*, http://*/js/, https://*.com.
+_ANY_HOST_SOURCE = re.compile(r"(?:(?P<scheme>[a-z][a-z0-9+.-]*)://)?\*(?:\.[a-z0-9-]+)?(?::(?:[0-9]+|\*))?(?:/.*)?")
 
 # For each part of script loading, the directives that govern it, most specific
 # first: the first one a policy has is the one that applies (CSP3 section 6.8.4,
@@ -58,13 +59,15 @@ _TOKEN = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
 _QUOTED_STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
 
 
-def _hsts_directives(value: str) -> dict[str, str | None] | str:
+def _hsts_directives(value: str, strict: bool = True) -> dict[str, str | None] | str:
     """Directive name (lower case) -> value with quotes removed, or None for a bare directive.
 
-    Returns why browsers ignore the whole header instead, as Chromium and
-    Firefox do: a name or value that does not follow the grammar, a repeated
-    max-age or includeSubDomains, or an includeSubDomains with a value (RFC
-    6797 section 6.1). Other directives, preload among them, are ignored.
+    Returns why the header is invalid instead. Both modes reject what every
+    browser rejects: a repeated max-age or includeSubDomains, an
+    includeSubDomains with a value, or a malformed max-age or includeSubDomains.
+    strict also rejects any other directive outside the RFC 6797 grammar, as
+    stricter parsers such as Firefox's do; with strict=False such a directive
+    is skipped, as Chromium skips a directive it does not know.
     """
     directives: dict[str, str | None] = {}
     for part in split_list(value, ";"):
@@ -72,14 +75,16 @@ def _hsts_directives(value: str) -> dict[str, str | None] | str:
             continue
         name, sep, raw = part.partition("=")
         name, raw = name.strip(" \t"), raw.strip(" \t")
-        if not _TOKEN.fullmatch(name):
-            return f"'{name}' is not a valid directive"
-        if sep and _QUOTED_STRING.fullmatch(raw):
-            raw = re.sub(r"\\(.)", r"\1", raw[1:-1])
-        elif sep and not _TOKEN.fullmatch(raw):
-            return f"the value of {name} is not valid"
         lower = name.lower()
-        if lower in ("max-age", "includesubdomains") and lower in directives:
+        known = lower in ("max-age", "includesubdomains")
+        quoted = bool(sep) and bool(_QUOTED_STRING.fullmatch(raw))
+        if not _TOKEN.fullmatch(name) or (sep and not quoted and not _TOKEN.fullmatch(raw)):
+            if strict or known:
+                return f"'{name}' is not a valid directive" if not _TOKEN.fullmatch(name) else f"the value of {name} is not valid"
+            continue
+        if quoted:
+            raw = re.sub(r"\\(.)", r"\1", raw[1:-1])
+        if known and lower in directives:
             return f"it repeats {name}"
         if lower == "includesubdomains" and sep:
             return "includeSubDomains takes no value"
@@ -112,7 +117,19 @@ def _check_hsts(headers: HeaderSource, https: bool) -> Finding:
     extra = f" (first of {len(values)} Strict-Transport-Security headers; browsers use only the first)" if len(values) > 1 else ""
     directives = _hsts_directives(value)
     if isinstance(directives, str):
-        return Finding("hsts", FAIL, f"Strict-Transport-Security is not valid ({directives}), so browsers ignore it: '{value}'{extra}")
+        accepted = _hsts_directives(value, strict=False)
+        if isinstance(accepted, str):
+            return Finding("hsts", FAIL, f"Strict-Transport-Security is not valid ({accepted}), so browsers ignore it: '{value}'{extra}")
+        # Chromium skips the unknown directive; a stricter parser drops the whole header.
+        finding = _judge_hsts(accepted, extra)
+        if finding.status == FAIL:
+            return finding
+        return Finding("hsts", WARN, f"{finding.detail}; but it is outside the RFC 6797 grammar ({directives}), so Chromium-based "
+                                     "browsers apply it and stricter ones, such as Firefox, may ignore it")
+    return _judge_hsts(directives, extra)
+
+
+def _judge_hsts(directives: dict[str, str | None], extra: str) -> Finding:
     raw_max_age = directives.get("max-age")
     if raw_max_age is None or not re.fullmatch(r"[0-9]+", raw_max_age):
         return Finding("hsts", FAIL, f"Strict-Transport-Security has no valid max-age{extra}")
@@ -141,23 +158,36 @@ def _check_hsts(headers: HeaderSource, https: bool) -> Finding:
 # --- Content-Security-Policy ----------------------------------------------------------------------
 
 
+# ASCII whitespace, the only characters that separate a directive's name and sources.
+_ASCII_WHITESPACE = "\t\n\f\r "
+
+# A directive browsers keep: ASCII whitespace and printable ASCII only. CSP3 section
+# 2.2.1 drops a directive with a non-ASCII character, and Chromium also drops one
+# with a control character ("contains an invalid character").
+_VALID_DIRECTIVE = re.compile(r"[\t\n\f\r\x20-\x7e]*")
+
+
 def _csp_policies(header_values: list[str]) -> list[dict[str, list[str]]]:
     """Parse Content-Security-Policy headers into policies, each a {directive: [sources]} dict.
 
     Every header is enforced, and one header can carry several policies separated
-    by commas (CSP3 section 2.2.2). Within a policy the first occurrence of a
-    directive wins and later ones are ignored, as in browsers. Directive names and
+    by commas (CSP3 section 2.2.3). Within a policy the first occurrence of a
+    directive wins and later ones are ignored, and a directive with a character
+    browsers do not accept is dropped, as in section 2.2.1. Directive names and
     source expressions are compared in lower case. Policies with no directives are
     dropped, since they enforce nothing.
     """
     policies = []
     for header in header_values:
-        for serialized in header.split(","):
+        for serialized in split_list(header):
             directives: dict[str, list[str]] = {}
-            for part in serialized.split(";"):
-                tokens = part.split()
-                if tokens and tokens[0].lower() not in directives:
-                    directives[tokens[0].lower()] = [t.lower() for t in tokens[1:]]
+            for token in serialized.split(";"):
+                token = token.strip(_ASCII_WHITESPACE)
+                if not token or not _VALID_DIRECTIVE.fullmatch(token):
+                    continue
+                name, *sources = re.split(r"[\t\n\f\r ]+", token)
+                if name.lower() not in directives:
+                    directives[name.lower()] = [source.lower() for source in sources]
             if directives:
                 policies.append(directives)
     return policies
@@ -273,6 +303,9 @@ def check_csp(headers: HeaderSource) -> Finding:
         return Finding("csp", FAIL, "Content-Security-Policy header is missing")
     policies = _csp_policies(enforced)
     if not policies:
+        if any(value.strip(_ASCII_WHITESPACE + ",;") for value in enforced):
+            return Finding("csp", FAIL, "Content-Security-Policy has no directive browsers accept (a character outside "
+                                        "the CSP syntax makes them drop it), so it enforces nothing")
         return Finding("csp", FAIL, "Content-Security-Policy is empty, so it enforces nothing")
     if not _governing(policies, "elements"):
         return Finding("csp", WARN, "Content-Security-Policy does not restrict scripts (no script-src or default-src), so it does not stop injected scripts")
@@ -381,21 +414,25 @@ def check_x_xss_protection(headers: HeaderSource) -> Finding:
     could be abused to detect or block content on the page (XS-Leaks), so OWASP
     recommends '0' or omitting the header and relying on Content-Security-Policy.
     """
-    # Repeated headers are combined, so "0, 0" is not a valid value.
     value = _headers(headers).combined("X-XSS-Protection")
     if value is None:
         return Finding("x-xss-protection", PASS, "not set (rely on Content-Security-Policy)")
-    token = value.split(";", 1)[0].strip(HTTP_WHITESPACE)
-    if token == "0":
-        return Finding("x-xss-protection", PASS, "0 (legacy XSS auditor disabled)")
-    if token == "1":
+    # Blink and WebKit decided on the first character of the (combined) value:
+    # 0 turned the auditor off, 1 turned it on, anything else was invalid.
+    first = value.lstrip(HTTP_WHITESPACE)[:1]
+    if first == "0":
+        return Finding("x-xss-protection", PASS, "0 (legacy XSS auditor disabled)" + (f" (sent as '{value}')" if value != "0" else ""))
+    if first == "1":
         return Finding("x-xss-protection", WARN, f"'{value}' enables the legacy XSS auditor, which can be abused for XS-Leaks; set it to 0 or remove it")
     return Finding("x-xss-protection", WARN, f"'{value}' is not a valid value; set it to 0 or remove it")
 
 
 def _policy_token(value: str | None) -> str | None:
-    """First token of a policy header, e.g. 'same-origin; report-to="x"' -> 'same-origin'; None when empty."""
-    return value.split(";", 1)[0].strip(HTTP_WHITESPACE).lower() or None if value else None
+    """First token of a policy header, e.g. 'same-origin; report-to="x"' -> 'same-origin'; None when empty.
+
+    The case is kept: browsers compare these values case-sensitively, so Same-Origin is not same-origin.
+    """
+    return value.split(";", 1)[0].strip(HTTP_WHITESPACE) or None if value else None
 
 
 # Values browsers understand. Anything else is ignored, which means no protection.
