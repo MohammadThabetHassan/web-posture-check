@@ -4,7 +4,10 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- SARIF 2.1.0 output for GitHub code scanning: `--format sarif`, and `--sarif FILE` to write a SARIF log next to the normal report from the same scan. FAIL is an error, WARN a warning; alerts keep one identity per check and URL across runs. `--sarif-location PATH` points every result at a repository file.
+- The GitHub Action always writes a SARIF log, anchored to the workflow file that runs it, and has a `sarif` output for `github/codeql-action/upload-sarif`. CI uploads it to code scanning and validates it against the OASIS SARIF schema.
 
 ## [0.3.0] - 2026-10-10
 

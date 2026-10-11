@@ -590,7 +590,8 @@ class ListChecksAndOutputTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = os.path.join(folder, "report.md")
             out = io.StringIO()
-            with mock.patch.object(fetch, "fetch_headers", return_value=("https://example.com/", {}, [], 200)),                     redirect_stdout(out):
+            with mock.patch.object(fetch, "fetch_headers", return_value=("https://example.com/", {}, [], 200)), \
+                    redirect_stdout(out):
                 code = cli.main(["example.com", "--only", "hsts", "--format", "markdown", "--output", path])
             with open(path, encoding="utf-8") as handle:
                 report = handle.read()
@@ -601,7 +602,9 @@ class ListChecksAndOutputTest(unittest.TestCase):
 
     def test_unwritable_output_exits_2(self):
         err = io.StringIO()
-        with tempfile.TemporaryDirectory() as folder,                 mock.patch.object(fetch, "fetch_headers", return_value=("https://example.com/", {}, [], 200)),                 redirect_stdout(io.StringIO()), mock.patch("sys.stderr", err):
+        with tempfile.TemporaryDirectory() as folder, \
+                mock.patch.object(fetch, "fetch_headers", return_value=("https://example.com/", {}, [], 200)), \
+                redirect_stdout(io.StringIO()), mock.patch("sys.stderr", err):
             code = cli.main(["example.com", "--only", "hsts", "--output", os.path.join(folder, "missing", "report.md")])
         self.assertEqual(code, 2)
         self.assertIn("could not write --output", err.getvalue())
