@@ -253,7 +253,7 @@ jobs:
       security-events: write
     steps:
       - id: posture
-        uses: MohammadThabetHassan/web-posture-check@v0.4.0
+        uses: MohammadThabetHassan/web-posture-check@v0.3.0
         with:
           targets: example.com
       - if: always() && steps.posture.outputs.sarif != ''
