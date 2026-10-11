@@ -1,0 +1,19 @@
+name: Feature request
+description: A new check, option or output
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What should the tool detect or do?
+    validations:
+      required: true
+  - type: textarea
+    id: rule
+    attributes:
+      label: Proposed rule
+      description: For a new check, when it should FAIL and when it should WARN, and the standard or guidance behind it.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Anything else

@@ -16,10 +16,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Checks that pass on github.com
+        id: scan
         uses: ./
         with:
           targets: github.com
           args: --only http-status,hsts,tls-certificate,caa
+      - name: The outputs are set
+        env:
+          SCORE: ${{ steps.scan.outputs.score }}
+          GRADE: ${{ steps.scan.outputs.grade }}
+          CODE: ${{ steps.scan.outputs.exit-code }}
+          REPORT: ${{ steps.scan.outputs.report }}
+        run: |
+          echo "score=$SCORE grade=$GRADE exit-code=$CODE report=$REPORT"
+          test "$SCORE" = "100" && test "$GRADE" = "A" && test "$CODE" = "0"
+          grep -q "Web posture report: https://github.com" "$REPORT"
 
   failing-run:
     runs-on: ubuntu-latest
@@ -33,9 +44,11 @@ jobs:
           targets: example.com
           args: --only hsts
           dns: "false"
-      - name: The action must have failed the step
+      - name: The action must have failed the step, with matching outputs
         env:
           OUTCOME: ${{ steps.scan.outcome }}
+          GRADE: ${{ steps.scan.outputs.grade }}
+          CODE: ${{ steps.scan.outputs.exit-code }}
         run: |
-          echo "outcome: $OUTCOME"
-          test "$OUTCOME" = "failure"
+          echo "outcome: $OUTCOME grade=$GRADE exit-code=$CODE"
+          test "$OUTCOME" = "failure" && test "$GRADE" = "F" && test "$CODE" = "1"

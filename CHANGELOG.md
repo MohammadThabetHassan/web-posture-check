@@ -6,6 +6,22 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 
 Nothing yet.
 
+## [0.3.0] - 2026-10-10
+
+Makes the GitHub Action ready for the GitHub Marketplace and adds two CLI options.
+
+### Added
+
+- `--list-checks` prints every check name with a one-line description.
+- `--output FILE` writes the report to a UTF-8 file instead of printing it. A file that cannot be written exits 2.
+- The GitHub Action has outputs: `score` (lowest across targets), `grade` (worst), `exit-code` and `report` (path of the Markdown report), so later steps can use the result.
+- Issue templates (bug report, feature request) and a pull request template.
+
+### Changed
+
+- The Action writes its report with `--output` instead of a shell redirect, and its description and authors are ready for the Marketplace listing.
+- The README is rewritten: quick start, every check's FAIL and WARN rules, the Action's inputs and outputs, how it works, and development notes.
+
 ## [0.2.0] - 2026-10-10
 
 First release published to PyPI. Every change below was a pull request co-authored by Mohammad Thabet and Omar Alraas.
@@ -54,6 +70,7 @@ First release published to PyPI. Every change below was a pull request co-author
 
 - Initial release: HTTP security header checks with text and JSON output.
 
-[Unreleased]: https://github.com/MohammadThabetHassan/web-posture-check/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/MohammadThabetHassan/web-posture-check/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/MohammadThabetHassan/web-posture-check/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/MohammadThabetHassan/web-posture-check/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/MohammadThabetHassan/web-posture-check/tree/v0.1.0

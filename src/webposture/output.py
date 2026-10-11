@@ -1,4 +1,4 @@
-"""Printing results as text, JSON or Markdown."""
+"""Rendering results as text, JSON or Markdown."""
 
 import json
 from datetime import datetime, timezone
@@ -28,19 +28,14 @@ def to_text(result):
     return "\n".join(lines)
 
 
-def report(output_format, results, single):
-    """Print every result. With one target the output is a single object or report."""
+def render(output_format, results, single):
+    """Return every result as one string. With one target it is a single object or report."""
     if output_format == "json":
         if single:
-            if results:
-                print(json.dumps(to_json(results[0]), indent=2))
-        else:
-            print(json.dumps({"results": [to_json(r) for r in results]}, indent=2))
-        return
+            return json.dumps(to_json(results[0]), indent=2) + "\n" if results else ""
+        return json.dumps({"results": [to_json(r) for r in results]}, indent=2) + "\n"
     if output_format == "markdown":
         now = datetime.now(timezone.utc)
-        print("\n".join(markdown.render(r["url"], r["status"], r["findings"], __version__, now, note=r["note"],
-                                         score=score.compute(r["findings"])) for r in results), end="")
-        return
-    if results:
-        print("\n\n".join(to_text(r) for r in results))
+        return "\n".join(markdown.render(r["url"], r["status"], r["findings"], __version__, now, note=r["note"],
+                                          score=score.compute(r["findings"])) for r in results)
+    return "\n\n".join(to_text(r) for r in results) + "\n" if results else ""
