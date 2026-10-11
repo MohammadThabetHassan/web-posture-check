@@ -6,7 +6,7 @@ import unittest
 from contextlib import redirect_stdout
 from unittest import mock
 
-from webposture import __version__, cli, fetch, runner, sarif
+from webposture import __version__, checks, cli, fetch, runner, sarif
 from webposture.findings import Finding
 
 
@@ -38,6 +38,17 @@ class SarifRenderTest(unittest.TestCase):
                                Finding("spf", "WARN", "skipped: dnspython is not installed"))])
         results = log["runs"][0]["results"]
         self.assertEqual([(r["ruleId"], r["level"]) for r in results], [("hsts", "error"), ("caa", "warning")])
+
+    def test_every_rule_has_a_security_severity_github_can_read(self):
+        # GitHub reads properties["security-severity"] as a number in a string, 0.0 to 10.0,
+        # on rules tagged "security", and shows it as Critical, High, Medium or Low.
+        log = sarif.render([], checks.NAMES, checks.SUMMARIES, severities=checks.SEVERITIES)
+        for rule in log["runs"][0]["tool"]["driver"]["rules"]:
+            properties = rule["properties"]
+            self.assertIn("security", properties["tags"])
+            self.assertTrue(0.0 <= float(properties["security-severity"]) <= 10.0, rule["id"])
+            self.assertEqual(properties["security-severity"], f"{checks.SEVERITIES[rule['id']]:.1f}")
+        self.assertNotIn("security-severity", _render([])["runs"][0]["tool"]["driver"]["rules"][0]["properties"])
 
     def test_rule_index_points_at_the_rule(self):
         log = _render([_result("https://example.com/", Finding("dkim", "WARN", "x"))])
@@ -136,6 +147,8 @@ class SarifCliTest(unittest.TestCase):
         code, out = self._main("--format", "sarif")
         log = json.loads(out)
         self.assertEqual([r["ruleId"] for r in log["runs"][0]["results"]], ["hsts"])
+        hsts_rule = log["runs"][0]["tool"]["driver"]["rules"][log["runs"][0]["results"][0]["ruleIndex"]]
+        self.assertEqual(hsts_rule["properties"]["security-severity"], "6.5")
         self.assertEqual(code, 1)
 
     def test_sarif_file_is_written_next_to_the_normal_report_from_one_scan(self):

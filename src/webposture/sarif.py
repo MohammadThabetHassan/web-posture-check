@@ -36,7 +36,7 @@ INFORMATION_URI = "https://github.com/MohammadThabetHassan/web-posture-check"
 LEVELS = {FAIL: "error", WARN: "warning"}
 
 
-def _rule(name: str, summary: str) -> dict[str, Any]:
+def _rule(name: str, summary: str, severity: float | None) -> dict[str, Any]:
     return {
         "id": name,
         "shortDescription": {"text": f"{name}: {summary}"},
@@ -47,7 +47,10 @@ def _rule(name: str, summary: str) -> dict[str, Any]:
             "markdown": f"{summary}. See [the check reference]({INFORMATION_URI}#checks) for when this check fails or warns.",
         },
         "defaultConfiguration": {"level": "warning"},
-        "properties": {"tags": ["security", "web-posture"]},
+        # GitHub shows security-severity (a number as a string) as Critical, High, Medium or Low
+        # for rules tagged "security".
+        "properties": {"tags": ["security", "web-posture"],
+                       **({"security-severity": f"{severity:.1f}"} if severity is not None else {})},
     }
 
 
@@ -105,13 +108,14 @@ def _fingerprint(check: str, url: str) -> str:
 
 
 def render(results: Sequence[ScanResult], checks: Sequence[str], summaries: Mapping[str, str],
-           errors: Sequence[str] = (), anchor: str | None = None) -> dict[str, Any]:
+           errors: Sequence[str] = (), anchor: str | None = None, severities: Mapping[str, float] | None = None) -> dict[str, Any]:
     """Return a SARIF log (a dict) for results.
 
     checks is every check name in report order and summaries maps each name
     to its one-line description. errors are messages for targets that could
     not be scanned. anchor, if given, is a repository file every result
-    points to instead of a path made from the URL.
+    points to instead of a path made from the URL. severities, if given, maps
+    each name to its security-severity (0.0 to 10.0) for GitHub code scanning.
     """
     index = {name: i for i, name in enumerate(checks)}
     sarif_results: list[dict[str, Any]] = []
@@ -141,7 +145,7 @@ def render(results: Sequence[ScanResult], checks: Sequence[str], summaries: Mapp
                 "version": __version__,
                 "semanticVersion": __version__,
                 "informationUri": INFORMATION_URI,
-                "rules": [_rule(name, summaries[name]) for name in checks],
+                "rules": [_rule(name, summaries[name], (severities or {}).get(name)) for name in checks],
             }},
             "invocations": [invocation],
             "results": sarif_results,

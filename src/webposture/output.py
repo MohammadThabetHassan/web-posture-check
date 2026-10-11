@@ -43,7 +43,7 @@ def to_text(result: ScanResult) -> str:
 
 
 def to_sarif(results: Sequence[ScanResult], errors: Sequence[str] = (), anchor: str | None = None) -> str:
-    log = sarif.render(results, checks.NAMES, checks.SUMMARIES, errors=errors, anchor=anchor)
+    log = sarif.render(results, checks.NAMES, checks.SUMMARIES, errors=errors, anchor=anchor, severities=checks.SEVERITIES)
     return json.dumps(log, indent=2) + "\n"
 
 
