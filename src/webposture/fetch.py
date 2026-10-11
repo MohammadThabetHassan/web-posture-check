@@ -210,5 +210,5 @@ def describe_fetch_error(url: str, err: BaseException, timeout: float, attempts:
         return f"{url} closed the connection ({tries}); this is often rate limiting or a firewall"
     if isinstance(reason, http.client.HTTPException):
         # These carry little text of their own (BadStatusLine, IncompleteRead, LineTooLong).
-        return f"could not fetch {url}: the server sent a malformed response ({type(reason).__name__}: {reason})"
+        return f"could not fetch {url}: the server sent a malformed response ({type(reason).__name__}: {str(reason).strip()})"
     return f"could not fetch {url}: {reason or type(reason).__name__}"
