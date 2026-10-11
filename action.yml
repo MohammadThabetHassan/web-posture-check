@@ -12,7 +12,8 @@ inputs:
   args:
     description: >-
       Extra options, e.g. "--only tls-certificate,caa" or "--fail-on warn".
-      Do not pass --format or --json; the action always produces a Markdown report.
+      Do not pass --format, --json, --output, --sarif or --sarif-location; the action writes
+      the Markdown report and the SARIF log itself.
     required: false
     default: ""
   dns:
@@ -37,6 +38,11 @@ outputs:
   report:
     description: Path of the Markdown report file.
     value: ${{ steps.scan.outputs.report }}
+  sarif:
+    description: >-
+      Path of the SARIF 2.1.0 log, for github/codeql-action/upload-sarif. Results point to the
+      workflow file that ran the scan, and each one names the scanned URL.
+    value: ${{ steps.scan.outputs.sarif }}
 
 runs:
   using: composite
@@ -71,19 +77,31 @@ runs:
         set -f
         set +e
         report="$RUNNER_TEMP/web-posture-report.md"
-        web-posture-check $TARGETS $EXTRA_ARGS --format markdown --output "$report"
+        sarif="$RUNNER_TEMP/web-posture-check.sarif"
+        # Code scanning needs a file in this repository for each result: use the
+        # workflow file that runs the scan ("owner/repo/path@ref" -> "path").
+        anchor="${GITHUB_WORKFLOW_REF%%@*}"
+        anchor="${anchor#"$GITHUB_REPOSITORY"/}"
+        case "$anchor" in
+          .github/workflows/*) anchor_args=(--sarif-location "$anchor") ;;
+          *) anchor_args=() ;;
+        esac
+        web-posture-check $TARGETS $EXTRA_ARGS --format markdown --output "$report" --sarif "$sarif" "${anchor_args[@]}"
         code=$?
         set -e
         touch "$report"
         cat "$report"
         cat "$report" >> "$GITHUB_STEP_SUMMARY"
-        # Lowest score and worst grade across every "**Grade X** (N/100)" line of the report.
+        # Lowest score and worst grade across the report's "**Grade X** (N/100)" summary
+        # lines. Only a line that starts with it counts: text quoted from a site sits
+        # inside a table row, so a site cannot add a grade of its own.
         python - "$report" >> "$GITHUB_OUTPUT" <<'PY'
         import re, sys
-        found = re.findall(r"\*\*Grade ([A-F])\*\* \((\d+)/100\)", open(sys.argv[1], encoding="utf-8").read())
+        found = re.findall(r"^\*\*Grade ([A-F])\*\* \((\d+)/100\)", open(sys.argv[1], encoding="utf-8").read(), re.M)
         print("score=" + (str(min(int(s) for _, s in found)) if found else ""))
         print("grade=" + (max(g for g, _ in found) if found else ""))
         PY
         echo "exit-code=$code" >> "$GITHUB_OUTPUT"
         echo "report=$report" >> "$GITHUB_OUTPUT"
+        if [ -s "$sarif" ]; then echo "sarif=$sarif" >> "$GITHUB_OUTPUT"; fi
         exit $code

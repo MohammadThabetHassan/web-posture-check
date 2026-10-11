@@ -7,10 +7,11 @@ import threading
 import time
 import unittest
 import urllib.error
+from collections.abc import Callable
 from contextlib import redirect_stdout
 from unittest import mock
 
-from webposture import cli, emailauth, fetch, runner
+from webposture import cli, emailauth, fetch, output, runner
 from webposture.findings import Finding
 
 
@@ -77,7 +78,7 @@ class DmarcFallbackTest(unittest.TestCase):
         with mock.patch.object(emailauth, "lookup_txt", side_effect=fake_lookup):
             finding = runner.check_dmarc("https://mail.google.com/", 5)
         self.assertEqual(finding.status, "PASS")
-        self.assertIn("_dmarc.google.com", finding.detail)
+        self.assertIn("_dmarc.google.com (p=reject applies to mail.google.com)", finding.detail)
 
 
 class DkimSelectorTest(unittest.TestCase):
@@ -111,11 +112,17 @@ class CheckSelectionTest(unittest.TestCase):
 
     def _run(self, *argv):
         called = []
+
+        def record(name, value):
+            called.append(name)
+            return value
+
         patches = [mock.patch.object(fetch, "fetch_headers", return_value=("https://example.com/", {}, [], 200)),
-                   mock.patch.object(fetch, "fetch_final_url", side_effect=lambda *a, **k: called.append("https-redirect") or "https://example.com/")]
+                   mock.patch.object(fetch, "fetch_final_url",
+                                     side_effect=lambda *a, **k: record("https-redirect", "https://example.com/"))]
         for func, name in self.NETWORK.items():
             patches.append(mock.patch.object(
-                runner, func, side_effect=lambda *a, _n=name, **k: called.append(_n) or Finding(_n, "PASS", "ok")))
+                runner, func, side_effect=lambda *a, _n=name, **k: record(_n, Finding(_n, "PASS", "ok"))))
         out = io.StringIO()
         for p in patches:
             p.start()
@@ -166,6 +173,13 @@ class CheckSelectionTest(unittest.TestCase):
 class ScoreOutputTest(unittest.TestCase):
     """The score and grade reach the JSON output. No network needed."""
 
+    def test_text_has_no_score_when_nothing_was_scored(self):
+        result = runner.failed("https://example.com/", "boom")
+        result["findings"] = [Finding("spf", "WARN", "skipped: no DNS support")]
+        text = output.to_text(result)
+        self.assertNotIn("Score:", text)
+        self.assertIn("[WARN] spf: skipped: no DNS support", text)
+
     def test_json_carries_score_and_grade(self):
         out = io.StringIO()
         with mock.patch.object(fetch, "fetch_headers", return_value=("https://example.com/", {}, [], 200)), \
@@ -182,7 +196,7 @@ class MultipleTargetsTest(unittest.TestCase):
     """Several targets in one run. Fetches are mocked; no network needed."""
 
     # hsts passes on good.example, fails on bad.example; down.example is unreachable.
-    RESPONSES = {
+    RESPONSES: dict[str, tuple] = {
         "https://good.example": ("https://good.example/", {"Strict-Transport-Security": "max-age=31536000"}, [], 200),
         "https://bad.example": ("https://bad.example/", {}, [], 200),
     }
@@ -215,8 +229,8 @@ class MultipleTargetsTest(unittest.TestCase):
         # its own full report. Guards against only the first target rendering.
         _, out = self._run("good.example", "bad.example", "--format", "markdown")
         self.assertEqual(out.count("## Web posture report:"), 2)
-        self.assertIn("## Web posture report: https://good.example/", out)
-        self.assertIn("## Web posture report: https://bad.example/", out)
+        self.assertIn("## Web posture report: `https://good.example/`", out)
+        self.assertIn("## Web posture report: `https://bad.example/`", out)
 
     def test_worst_exit_code_wins_and_other_targets_still_run(self):
         code, out = self._run("good.example", "down.example", "bad.example")
@@ -235,6 +249,58 @@ class MultipleTargetsTest(unittest.TestCase):
             _, out = self._run("good.example", "--targets-file", path, "--json")
         self.assertEqual([r["url"] for r in json.loads(out)["results"]],
                          ["https://good.example/", "https://bad.example/", "https://good.example/"])
+
+    def test_targets_file_may_start_with_a_byte_order_mark(self):
+        # Windows editors often save UTF-8 with a BOM; it must not become part of the first target.
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "sites.txt")
+            with open(path, "w", encoding="utf-8-sig") as handle:
+                handle.write("good.example\n")
+            _, out = self._run("--targets-file", path, "--json")
+        self.assertEqual(json.loads(out)["url"], "https://good.example/")
+
+    def test_a_targets_file_that_is_not_utf8_is_a_usage_error(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "sites.txt")
+            with open(path, "wb") as handle:
+                handle.write(b"caf\xe9.example\n")
+            err = io.StringIO()
+            with mock.patch("sys.stderr", err), self.assertRaises(SystemExit) as ctx:
+                cli.main(["--targets-file", path])
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertIn("could not read --targets-file: it is not UTF-8 text", err.getvalue())
+
+    def test_json_keeps_every_target_in_input_order_with_its_error(self):
+        code, out = self._run("good.example", "down.example", "exa mple.com", "bad.example", "--json")
+        results = json.loads(out)["results"]
+        self.assertEqual([r["url"] for r in results],
+                         ["https://good.example/", "https://down.example", "exa mple.com", "https://bad.example/"])
+        self.assertEqual([r.get("error", "")[:18] for r in results], ["", "could not fetch ht", "invalid target 'ex", ""])
+        for unscanned in results[1:3]:
+            self.assertEqual((unscanned["status"], unscanned["findings"]), (None, []))
+            self.assertNotIn("score", unscanned)
+        self.assertEqual(code, 2)
+
+    def test_a_single_unreachable_target_is_still_a_json_document(self):
+        code, out = self._run("down.example", "--json")
+        self.assertEqual(json.loads(out), {"url": "https://down.example", "status": None, "findings": [],
+                                           "error": "could not fetch https://down.example: Name or service not known"})
+        self.assertEqual(code, 2)
+
+    def test_markdown_says_why_a_target_was_not_scanned(self):
+        code, out = self._run("good.example", "down.example", "--format", "markdown")
+        self.assertIn("## Web posture report: `https://down.example`\n", out)
+        self.assertTrue(out.endswith("\n**Error:** `could not fetch https://down.example: Name or service not known`\n"), out)
+        # Only the scanned target has a grade and a table.
+        self.assertEqual(out.count("**Grade "), 1)
+        self.assertEqual(out.count("| Status | Check | Detail |"), 1)
+        self.assertEqual(code, 2)
+
+    def test_text_report_leaves_unscanned_targets_to_stderr(self):
+        self.assertEqual(self._run("down.example"), (2, ""))
+        _, out = self._run("down.example", "good.example")
+        self.assertNotIn("down.example", out)
+        self.assertIn("Target: https://good.example/", out)
 
     def test_no_targets_is_a_usage_error(self):
         with mock.patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit) as ctx:
@@ -294,10 +360,10 @@ class FailOnTest(unittest.TestCase):
 class RetryTest(unittest.TestCase):
     """Transient failures are retried and explained. No network, no real sleeping."""
 
-    OK = ("https://example.com/", {"Strict-Transport-Security": "max-age=31536000"}, [], 200)
+    OK: tuple = ("https://example.com/", {"Strict-Transport-Security": "max-age=31536000"}, [], 200)
 
     def setUp(self):
-        sleep = mock.patch.object(fetch.time, "sleep")
+        sleep = mock.patch.object(time, "sleep")
         self.sleep = sleep.start()
         self.addCleanup(sleep.stop)
 
@@ -352,7 +418,7 @@ class RetryTest(unittest.TestCase):
 class InsecureTest(unittest.TestCase):
     """--insecure runs the checks after a certificate failure, and only then. No network needed."""
 
-    OK = ("https://bad-cert.example/", {"Strict-Transport-Security": "max-age=31536000"}, [], 200)
+    OK: tuple = ("https://bad-cert.example/", {"Strict-Transport-Security": "max-age=31536000"}, [], 200)
 
     def _run(self, *argv):
         contexts = []
@@ -590,18 +656,21 @@ class ListChecksAndOutputTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             path = os.path.join(folder, "report.md")
             out = io.StringIO()
-            with mock.patch.object(fetch, "fetch_headers", return_value=("https://example.com/", {}, [], 200)),                     redirect_stdout(out):
+            with mock.patch.object(fetch, "fetch_headers", return_value=("https://example.com/", {}, [], 200)), \
+                    redirect_stdout(out):
                 code = cli.main(["example.com", "--only", "hsts", "--format", "markdown", "--output", path])
             with open(path, encoding="utf-8") as handle:
                 report = handle.read()
         self.assertEqual(out.getvalue(), "")
-        self.assertIn("## Web posture report: https://example.com/", report)
+        self.assertIn("## Web posture report: `https://example.com/`", report)
         self.assertIn("**Grade F** (0/100)", report)
         self.assertEqual(code, 1)
 
     def test_unwritable_output_exits_2(self):
         err = io.StringIO()
-        with tempfile.TemporaryDirectory() as folder,                 mock.patch.object(fetch, "fetch_headers", return_value=("https://example.com/", {}, [], 200)),                 redirect_stdout(io.StringIO()), mock.patch("sys.stderr", err):
+        with tempfile.TemporaryDirectory() as folder, \
+                mock.patch.object(fetch, "fetch_headers", return_value=("https://example.com/", {}, [], 200)), \
+                redirect_stdout(io.StringIO()), mock.patch("sys.stderr", err):
             code = cli.main(["example.com", "--only", "hsts", "--output", os.path.join(folder, "missing", "report.md")])
         self.assertEqual(code, 2)
         self.assertIn("could not write --output", err.getvalue())
@@ -623,20 +692,163 @@ class ActionOutputsTest(unittest.TestCase):
 
         action = os.path.join(os.path.dirname(__file__), "..", "action.yml")
         with open(action, encoding="utf-8") as handle:
-            match = re.search(r'findall\(r"(.+?)",', handle.read())
-        self.assertIsNotNone(match, "could not find the score/grade regex in action.yml")
-        pattern = match.group(1)
+            match = re.search(r'findall\(r"(.+?)", .+, re\.M\)', handle.read())
+        if match is None:
+            self.fail("could not find the score/grade regex (with re.M) in action.yml")
+        pattern = re.compile(match.group(1), re.M)
 
         now = datetime(2026, 10, 10, tzinfo=timezone.utc)
+        # A site's own text, quoted in a detail, must not count as a grade.
+        forged = "**Grade F** (0/100)\n**Grade F** (0/100) | x"
         reports = [
             markdown.render("https://good.example/", 200, [Finding("hsts", "PASS", "ok")], "0.3.0", now, score=(100, "A")),
-            markdown.render("https://bad.example/", 200, [Finding("hsts", "FAIL", "missing")], "0.3.0", now, score=(55, "F")),
+            markdown.render("https://bad.example/", 200, [Finding("hsts", "FAIL", "missing"), Finding("server", "WARN", forged)],
+                            "0.3.0", now, score=(55, "F")),
         ]
-        found = re.findall(pattern, "\n".join(reports))
+        found = pattern.findall("\n".join(reports))
         self.assertEqual(len(found), 2)  # the regex still matches the report format
         self.assertEqual(min(int(s) for _, s in found), 55)
         self.assertEqual(max(g for g, _ in found), "F")
 
+
+class TargetValidationTest(unittest.TestCase):
+    def test_accepted_targets(self):
+        cases = {
+            "example.com": "https://example.com",
+            " example.com:8443 ": "https://example.com:8443",
+            "HTTP://example.com/x": "HTTP://example.com/x",
+            "https://[2001:db8::1]:8443/": "https://[2001:db8::1]:8443/",
+            "bücher.example": "https://bücher.example",
+        }
+        for target, url in cases.items():
+            self.assertEqual(runner.normalise_target(target), url, target)
+
+    def test_refused_targets_say_why(self):
+        cases = {
+            "": "empty",
+            "exa mple.com": "spaces or control characters",
+            "example.com\x1b[2J": "spaces or control characters",
+            "ftp://example.com/": "only http:// and https://",
+            "file:///etc/passwd": "only http:// and https://",
+            "https://": "no host name",
+            "https://user:secret@example.com/": "credentials",
+            "example.com:abc": "port",
+            "example.com:99999": "port",
+            "https://[::1": "Invalid IPv6 URL",
+            "a" * 64 + ".example": "not a valid host name",
+        }
+        for target, reason in cases.items():
+            with self.assertRaises(ValueError, msg=target) as caught:
+                runner.normalise_target(target)
+            self.assertIn(reason, str(caught.exception), target)
+
+
+class RobustnessTest(unittest.TestCase):
+    """One bad target, option or broken pipe never ends the run with a traceback."""
+
+    GOOD: tuple = ("https://good.example/", {"Strict-Transport-Security": "max-age=31536000"}, [], 200)
+
+    def test_bad_targets_are_errors_and_good_targets_are_still_reported(self):
+        out, err = io.StringIO(), io.StringIO()
+        hostile = ["example.com:abc", "https://[::1", "ftp://example.com/", "exa mple.com", "https://user:pw@example.com"]
+        with mock.patch.object(fetch, "fetch_headers", return_value=self.GOOD), \
+                redirect_stdout(out), mock.patch("sys.stderr", err):
+            code = cli.main([*hostile, "good.example", "--only", "hsts", "--json"])
+        self.assertEqual(code, 2)
+        self.assertNotIn("Traceback", err.getvalue())
+        self.assertEqual(err.getvalue().count("error: invalid target"), len(hostile))
+        results = json.loads(out.getvalue())["results"]
+        self.assertIn("https://good.example/", [r["url"] for r in results])
+
+    def test_an_unexpected_exception_on_an_invalid_target_keeps_the_target(self):
+        with mock.patch.object(runner, "scan", side_effect=RuntimeError("boom")):
+            result, code = cli.scan_safely(" bad target ", runner.ScanOptions())
+        self.assertEqual((result["url"], code), ("bad target", 2))
+
+    def test_an_unexpected_exception_is_one_targets_error(self):
+        with mock.patch.object(runner, "scan", side_effect=RuntimeError("boom")):
+            result, code = cli.scan_safely("example.com", runner.ScanOptions())
+        self.assertEqual((result["url"], result["findings"], code), ("https://example.com", [], 2))
+        self.assertIn("unexpected error while scanning 'example.com': RuntimeError: boom", result["error"])
+        self.assertIn("issues", result["error"])
+
+    def test_error_lines_cannot_drive_the_terminal(self):
+        err = io.StringIO()
+        message = "could not fetch https://evil.example/: \x1b]52;c;ZXZpbA==\x07"
+        with mock.patch.object(runner, "scan", return_value=(runner.failed("https://evil.example/", message), 2)), \
+                redirect_stdout(io.StringIO()), mock.patch("sys.stderr", err):
+            cli.main(["evil.example"])
+        self.assertEqual(err.getvalue(), "error: could not fetch https://evil.example/: \\x1b]52;c;ZXZpbA==\\x07\n")
+
+    def test_timeout_must_be_a_positive_finite_number(self):
+        for value in ("0", "-1", "nan", "inf", "abc"):
+            with self.assertRaises(SystemExit, msg=value), mock.patch("sys.stderr", io.StringIO()):
+                cli.main(["example.com", "--timeout", value])
+        self.assertEqual(cli.build_parser().parse_args(["x", "--timeout", "2.5"]).timeout, 2.5)
+
+    def test_scan_options_come_from_the_command_line(self):
+        args = cli.build_parser().parse_args(["x", "--timeout", "3", "--retries", "0", "--insecure", "--fail-on", "warn",
+                                              "--only", "hsts,dkim", "--dkim-selector", "s1", "--dkim-selector", "s2"])
+        self.assertEqual(cli.scan_options(args), runner.ScanOptions(
+            timeout=3.0, retries=0, insecure=True, only=frozenset({"hsts", "dkim"}), skip=None, fail_on="warn",
+            dkim_selectors=("s1", "s2")))
+        defaults = cli.scan_options(cli.build_parser().parse_args(["x"]))
+        self.assertEqual(defaults, runner.ScanOptions())
+        self.assertTrue(defaults.wanted("hsts"))
+        skipping = cli.scan_options(cli.build_parser().parse_args(["x", "--skip", "hsts"]))
+        self.assertEqual((skipping.wanted("hsts"), skipping.wanted("csp")), (False, True))
+
+    def test_ctrl_c_exits_130_without_waiting_for_running_scans(self):
+        # Ctrl-C arrives while another scan is still running and would hold the
+        # pool for 30 s. Leaving at once is the point: code that waited for the
+        # running scans (a "with ThreadPoolExecutor()" block) would fail here.
+        started, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+
+        def scan(target, options):
+            if target == "slow.example":
+                started.set()
+                release.wait(30)
+                return runner.failed(target, "released"), 2
+            started.wait(10)
+            raise KeyboardInterrupt
+
+        err = io.StringIO()
+        begin = time.monotonic()
+        with mock.patch.object(runner, "scan", side_effect=scan), \
+                mock.patch.object(cli, "exit_now", side_effect=SystemExit) as exit_now, \
+                mock.patch("sys.stderr", err), self.assertRaises(SystemExit):
+            cli.main(["fast.example", "slow.example"])
+        self.assertLess(time.monotonic() - begin, 10)
+        exit_now.assert_called_once_with(130)
+        self.assertIn("interrupted", err.getvalue())
+
+    def test_exit_now_flushes_and_leaves_with_the_code(self):
+        # exit_now never returns, so the type checker would call the lines after it
+        # unreachable; with os._exit mocked it does return.
+        exit_now: Callable[[int], object] = cli.exit_now
+        with mock.patch.object(os, "_exit") as leave:
+            exit_now(130)
+        leave.assert_called_once_with(130)
+
+    def test_a_closed_pipe_is_not_a_traceback(self):
+        read_end, write_end = os.pipe()
+        self.addCleanup(os.close, read_end)
+        self.addCleanup(os.close, write_end)
+
+        class ClosedPipe:
+            def write(self, text):
+                raise BrokenPipeError
+
+            def flush(self):
+                pass
+
+            def fileno(self):
+                return write_end
+
+        with mock.patch.object(fetch, "fetch_headers", return_value=self.GOOD), mock.patch("sys.stdout", ClosedPipe()):
+            code = cli.main(["good.example", "--only", "hsts"])
+        self.assertEqual(code, 0)
 
 if __name__ == "__main__":
     unittest.main()

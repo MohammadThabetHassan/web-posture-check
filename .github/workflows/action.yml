@@ -10,11 +10,22 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request replaces the run still going for the old one.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   passing-run:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Uploads this run's SARIF, which has no results, so code scanning shows that it accepts the format.
+      security-events: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Checks that pass on github.com
         id: scan
         uses: ./
@@ -30,12 +41,21 @@ jobs:
         run: |
           echo "score=$SCORE grade=$GRADE exit-code=$CODE report=$REPORT"
           test "$SCORE" = "100" && test "$GRADE" = "A" && test "$CODE" = "0"
-          grep -q "Web posture report: https://github.com" "$REPORT"
+          grep -qF 'Web posture report: `https://github.com`' "$REPORT"
+      - name: Code scanning accepts the SARIF
+        # Pull requests from forks get a read-only token, so they cannot upload.
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: github/codeql-action/upload-sarif@2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2 # v4.38.2
+        with:
+          sarif_file: ${{ steps.scan.outputs.sarif }}
+          category: web-posture-check-ci
 
   failing-run:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: A check that fails on example.com (no HSTS)
         id: scan
         uses: ./
@@ -52,3 +72,22 @@ jobs:
         run: |
           echo "outcome: $OUTCOME grade=$GRADE exit-code=$CODE"
           test "$OUTCOME" = "failure" && test "$GRADE" = "F" && test "$CODE" = "1"
+      - name: The SARIF log is valid and anchored to this workflow
+        env:
+          SARIF: ${{ steps.scan.outputs.sarif }}
+        # The OASIS SARIF 2.1.0 schema, pinned to a commit of the specification repository.
+        run: |
+          pip install --quiet "jsonschema==4.25.1"
+          curl -fsSL -o "$RUNNER_TEMP/sarif-schema.json" \
+            https://raw.githubusercontent.com/oasis-tcs/sarif-spec/a560296ca8c921f3bdb8d4a8db57ab83dae968a7/sarif-2.1/schema/sarif-schema-2.1.0.json
+          python - "$SARIF" "$RUNNER_TEMP/sarif-schema.json" <<'PY'
+          import json, sys
+          import jsonschema
+          log = json.load(open(sys.argv[1], encoding="utf-8"))
+          jsonschema.validate(log, json.load(open(sys.argv[2], encoding="utf-8")))
+          results = log["runs"][0]["results"]
+          assert [(r["ruleId"], r["level"]) for r in results] == [("hsts", "error")], results
+          uri = results[0]["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
+          assert uri == ".github/workflows/action.yml", uri
+          print("SARIF valid:", results[0]["message"]["text"])
+          PY

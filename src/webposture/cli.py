@@ -4,59 +4,63 @@ The work itself lives in fetch (HTTP requests), runner (one target's checks)
 and output (text, JSON and Markdown).
 """
 
-import argparse
-import sys
-from concurrent.futures import ThreadPoolExecutor
+from __future__ import annotations
 
-from . import __version__, output, runner
+import argparse
+import math
+import os
+import sys
+from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
+from typing import NoReturn
+
+from . import __version__, checks, output, runner, sarif
+from .findings import ScanResult
+from .textsafe import printable
 
 # More than this many simultaneous scans gains little and looks like a flood to the sites.
 MAX_JOBS = 16
 
 
-def parse_check_names(value):
+def parse_check_names(value: str) -> list[str]:
     """argparse type for --only/--skip: comma-separated check names, validated."""
     names = [n.strip() for n in value.split(",") if n.strip()]
-    unknown = [n for n in names if n not in runner.ALL_CHECKS]
+    unknown = [n for n in names if n not in checks.NAMES]
     if unknown or not names:
         problem = f"unknown check name(s): {', '.join(unknown)}" if unknown else "no check names given"
-        raise argparse.ArgumentTypeError(f"{problem}; valid names: {', '.join(runner.ALL_CHECKS)}")
+        raise argparse.ArgumentTypeError(f"{problem}; valid names: {', '.join(checks.NAMES)}")
     return names
 
 
-# One line per check for --list-checks, in report order.
-CHECK_SUMMARIES = {
-    "http-status": "the final response is not an error page (bot protection, 4xx, 5xx)",
-    "hsts": "Strict-Transport-Security max-age, includeSubDomains and preload",
-    "csp": "Content-Security-Policy is set and its script policy is not unsafe",
-    "x-content-type-options": "X-Content-Type-Options: nosniff",
-    "clickjacking": "CSP frame-ancestors or X-Frame-Options",
-    "referrer-policy": "Referrer-Policy is set and not unsafe-url",
-    "permissions-policy": "Permissions-Policy is set",
-    "cross-origin-isolation": "Cross-Origin-Opener, -Resource and -Embedder policies",
-    "x-xss-protection": "the legacy XSS auditor is not turned on",
-    "information-leakage": "no server version or stack headers",
-    "cookies": "Secure, HttpOnly, SameSite and __Host- / __Secure- prefixes",
-    "cors": "no credentialed access for any origin (probe request)",
-    "tls-certificate": "trusted and not close to expiry",
-    "tls-protocols": "TLS 1.0 and 1.1 are refused",
-    "caa": "a CAA record limits which CAs may issue",
-    "security-txt": "/.well-known/security.txt (RFC 9116)",
-    "spf": "a single SPF record that does not allow everyone",
-    "dmarc": "a DMARC policy that quarantines or rejects",
-    "dkim": "a DKIM key under common or given selectors",
-    "https-redirect": "plain HTTP redirects to HTTPS",
-}
+# Kept here too for callers that used cli.CHECK_SUMMARIES.
+CHECK_SUMMARIES = checks.SUMMARIES
 
 
-def read_targets_file(path):
-    """One target per line; blank lines and lines starting with # are ignored."""
-    with open(path, encoding="utf-8") as handle:
+ISSUES_URL = "https://github.com/MohammadThabetHassan/web-posture-check/issues"
+
+
+def positive_seconds(value: str) -> float:
+    """argparse type for --timeout: a finite number of seconds above zero."""
+    try:
+        seconds = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{value!r} is not a number of seconds") from None
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise argparse.ArgumentTypeError(f"{value!r} must be a number of seconds greater than 0")
+    return seconds
+
+
+def read_targets_file(path: str) -> list[str]:
+    """One target per line; blank lines and lines starting with # are ignored.
+
+    The file is UTF-8, with or without a byte order mark (as Windows editors save it).
+    """
+    with open(path, encoding="utf-8-sig") as handle:
         lines = [line.strip() for line in handle]
     return [line for line in lines if line and not line.startswith("#")]
 
 
-def build_parser():
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="web-posture-check",
         description="Check a website's security posture: security headers, cookies, CORS, TLS, "
@@ -67,14 +71,21 @@ def build_parser():
     parser.add_argument("--targets-file", metavar="FILE",
                         help="read more targets from FILE, one per line (# starts a comment)")
     output_group = parser.add_mutually_exclusive_group()
-    output_group.add_argument("--format", choices=("text", "json", "markdown"), default="text",
-                              help="output format (default text); markdown is a table for tickets and pull requests")
+    output_group.add_argument("--format", choices=("text", "json", "markdown", "sarif"), default="text",
+                              help="output format (default text); markdown is a table for tickets and pull requests, "
+                                   "sarif is for GitHub code scanning")
     output_group.add_argument("--json", action="store_const", const="json", dest="format",
                               help="same as --format json")
     parser.add_argument("--output", metavar="FILE",
                         help="write the report to FILE (UTF-8) instead of printing it")
+    parser.add_argument("--sarif", metavar="FILE",
+                        help="also write a SARIF 2.1.0 log to FILE, from the same scan (for GitHub code scanning)")
+    parser.add_argument("--sarif-location", metavar="PATH",
+                        help="repository file every SARIF result points to, e.g. the workflow that runs the scan "
+                             "(default: a path made from the URL, such as example.com/login)")
     parser.add_argument("--list-checks", action="store_true", help="print every check name with a short description and exit")
-    parser.add_argument("--timeout", type=float, default=10.0, help="request timeout in seconds (default 10)")
+    parser.add_argument("--timeout", type=positive_seconds, default=10.0, metavar="SECONDS",
+                        help="request timeout in seconds, above 0 (default 10)")
     parser.add_argument("--insecure", action="store_true",
                         help="if a target's certificate is not trusted, still run the other checks without verification "
                              "(the certificate is reported as FAIL)")
@@ -95,13 +106,86 @@ def build_parser():
     return parser
 
 
-def main(argv=None):
+def write_file(path: str, text: str, option: str) -> bool:
+    """Write text to path as UTF-8; on failure print why and return False."""
+    try:
+        # UTF-8 whatever the console encoding is (Windows consoles are often not UTF-8).
+        with open(path, "w", encoding="utf-8", newline="\n") as handle:
+            handle.write(text)
+    except OSError as err:
+        print(f"error: could not write {option}: {err}", file=sys.stderr)
+        return False
+    return True
+
+
+def scan_options(args: argparse.Namespace) -> runner.ScanOptions:
+    """The scan settings from the parsed command line."""
+    return runner.ScanOptions(
+        timeout=args.timeout,
+        retries=args.retries,
+        insecure=args.insecure,
+        only=frozenset(args.only) if args.only is not None else None,
+        skip=frozenset(args.skip) if args.skip is not None else None,
+        fail_on=args.fail_on,
+        dkim_selectors=tuple(args.dkim_selector or ()),
+    )
+
+
+def scan_safely(target: str, options: runner.ScanOptions) -> runner.Outcome:
+    """runner.scan, but a bug while scanning one target becomes that target's error, exit code 2.
+
+    Without this, an unexpected exception in one thread would abort every other
+    target's report and print a traceback.
+    """
+    try:
+        return runner.scan(target, options)
+    except Exception as err:
+        message = f"unexpected error while scanning {target!r}: {type(err).__name__}: {err} (please report it at {ISSUES_URL})"
+        return runner.failed(display_url(target), message), 2
+
+
+def display_url(target: str) -> str:
+    """The URL a target was scanned as, or the target itself when it is not a valid one."""
+    try:
+        return runner.normalise_target(target)
+    except ValueError:
+        return target.strip()
+
+
+def write_stdout(text: str) -> bool:
+    """Print the report; if the reader has gone (e.g. piped into head), stop quietly instead of a traceback.
+
+    Returns True: a reader that stops early (head) has what it asked for.
+    """
+    try:
+        sys.stdout.write(text)
+        sys.stdout.flush()
+    except BrokenPipeError:
+        # Point stdout at devnull so the interpreter's own flush at exit is quiet too.
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        os.close(devnull)
+    return True
+
+
+def exit_now(code: int) -> NoReturn:
+    """Leave immediately, without waiting for worker threads that cannot be interrupted."""
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.sarif_location and not (args.sarif or args.format == "sarif"):
+        parser.error("--sarif-location only applies to SARIF output: add --sarif FILE or --format sarif")
+    if args.sarif_location and sarif.location_problem(args.sarif_location):
+        parser.error(f"--sarif-location {sarif.location_problem(args.sarif_location)}")
 
     if args.list_checks:
-        width = max(len(name) for name in runner.ALL_CHECKS)
-        print("\n".join(f"{name.ljust(width)}  {CHECK_SUMMARIES[name]}" for name in runner.ALL_CHECKS))
+        width = max(len(check.name) for check in checks.CATALOG)
+        print("\n".join(f"{check.name.ljust(width)}  {check.summary}" for check in checks.CATALOG))
         return 0
 
     targets = list(args.targets)
@@ -110,32 +194,36 @@ def main(argv=None):
             targets += read_targets_file(args.targets_file)
         except OSError as err:
             parser.error(f"could not read --targets-file: {err}")
+        except UnicodeDecodeError as err:
+            parser.error(f"could not read --targets-file: it is not UTF-8 text ({err.reason} at byte {err.start})")
     if not targets:
         parser.error("give at least one target, or --targets-file")
 
     # map() returns the outcomes in input order, however the scans finish.
-    with ThreadPoolExecutor(max_workers=min(args.jobs, len(targets))) as pool:
-        outcomes = list(pool.map(lambda target: runner.scan(target, args), targets))
-    results, codes = [], []
-    for result, code, error in outcomes:
-        codes.append(code)
-        if error:
-            print(f"error: {error}", file=sys.stderr)
-        if result is not None:
-            results.append(result)
-    text = output.render(args.format, results, single=len(targets) == 1)
-    if args.output:
-        try:
-            # Written as UTF-8 whatever the console encoding is (Windows consoles are often not UTF-8).
-            with open(args.output, "w", encoding="utf-8", newline="\n") as handle:
-                handle.write(text)
-        except OSError as err:
-            print(f"error: could not write --output: {err}", file=sys.stderr)
-            return 2
-    else:
-        sys.stdout.write(text)
-    # The worst outcome wins: 2 (a target could not be reached) over 1 (a FAIL) over 0.
-    return max(codes)
+    options = scan_options(args)
+    pool = ThreadPoolExecutor(max_workers=min(args.jobs, len(targets)))
+    try:
+        outcomes = list(pool.map(lambda target: scan_safely(target, options), targets))
+    except KeyboardInterrupt:
+        # Running scans cannot be stopped, and waiting for them could take
+        # minutes, so leave at once with the conventional code for Ctrl-C.
+        pool.shutdown(wait=False, cancel_futures=True)
+        print("interrupted", file=sys.stderr)
+        exit_now(130)
+    pool.shutdown()
+    # Every target has a result, in input order; one that could not be scanned carries its error.
+    results: list[ScanResult] = [result for result, _ in outcomes]
+    errors = [result["error"] for result in results if "error" in result]
+    for error in errors:
+        print(f"error: {printable(error)}", file=sys.stderr)
+    text = output.render(args.format, results, single=len(targets) == 1, errors=errors, sarif_anchor=args.sarif_location)
+    # The report comes first, and each output is attempted even if the other failed.
+    written = write_file(args.output, text, "--output") if args.output else write_stdout(text)
+    if args.sarif:
+        written = write_file(args.sarif, output.to_sarif(results, errors, args.sarif_location), "--sarif") and written
+    # The worst outcome wins: 2 (a target could not be scanned, or a report could
+    # not be written) over 1 (a FAIL) over 0.
+    return max(code for _, code in outcomes) if written else 2
 
 
 if __name__ == "__main__":

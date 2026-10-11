@@ -4,6 +4,8 @@ The CLI fetches /.well-known/security.txt; check_security_txt takes the
 status, content type and body and returns a Finding. No network access.
 """
 
+from __future__ import annotations
+
 from datetime import datetime, timedelta
 
 from .findings import PASS, WARN, Finding
@@ -14,13 +16,13 @@ PATH = "/.well-known/security.txt"
 MAX_EXPIRES_AHEAD = timedelta(days=365)
 
 
-def parse_fields(body):
+def parse_fields(body: str) -> dict[str, list[str]]:
     """Return {lower-case field name: [values]} from a security.txt body.
 
     Comments and blank lines are skipped. In a PGP-signed file, lines that
     start with "- " are dash-escaped (RFC 4880) and the prefix is removed.
     """
-    fields = {}
+    fields: dict[str, list[str]] = {}
     for raw in body.splitlines():
         line = raw[2:] if raw.startswith("- ") else raw
         line = line.strip()
@@ -31,7 +33,7 @@ def parse_fields(body):
     return fields
 
 
-def parse_expires(value):
+def parse_expires(value: str) -> datetime | None:
     """Parse an RFC 3339 date-time such as 2027-01-01T00:00:00.000Z. Returns None if invalid."""
     text = value.strip()
     if text[-1:] in ("z", "Z"):
@@ -46,7 +48,7 @@ def parse_expires(value):
     return parsed
 
 
-def check_security_txt(status, content_type, body, now):
+def check_security_txt(status: int | None, content_type: str | None, body: str, now: datetime) -> Finding:
     """WARN only: a missing or stale security.txt is a gap in disclosure, not a vulnerability."""
     if status is None or status == 404:
         return Finding("security-txt", WARN, f"no {PATH}, so researchers have no published way to report vulnerabilities")
@@ -76,6 +78,6 @@ def check_security_txt(status, content_type, body, now):
             problems.append(f"expired on {expires.date()}")
         elif expires - now > MAX_EXPIRES_AHEAD:
             problems.append(f"Expires {expires.date()} is more than a year away (RFC 9116 recommends less, to avoid stale contacts)")
-    if problems:
+    if problems or expires is None:
         return Finding("security-txt", WARN, f"{PATH}: " + "; ".join(problems))
     return Finding("security-txt", PASS, f"Contact: {contacts[0]}; expires {expires.date()}")

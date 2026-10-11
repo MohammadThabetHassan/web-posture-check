@@ -65,8 +65,8 @@ class LookupTxtTest(unittest.TestCase):
         blocked = {"dns": None, "dns.resolver": None, "dns.exception": None}
         with mock.patch.dict(sys.modules, blocked):
             txt, problem = emailauth.lookup_txt("example.com", 5)
-        self.assertIsNone(txt)
-        self.assertIn("web-posture-check[dns]", problem)
+        self.assertEqual(txt, [])
+        self.assertIn("web-posture-check[dns]", str(problem))
 
     @unittest.skipUnless(HAVE_DNSPYTHON, "needs the optional dns extra")
     def test_split_txt_strings_are_joined_without_spaces(self):
@@ -123,6 +123,9 @@ class DmarcTest(unittest.TestCase):
 
 
 class DkimTest(unittest.TestCase):
+    def test_dmarc_parts_without_a_value_are_ignored(self):
+        self.assertEqual(emailauth.parse_dmarc_tags("v=DMARC1; p=reject; junk; ;"), {"v": "DMARC1", "p": "reject"})
+
     def test_parse_key_ignores_non_dkim_txt(self):
         self.assertIsNone(emailauth.parse_dkim_key(["google-site-verification=abc"]))
         self.assertEqual(emailauth.parse_dkim_key(["v=DKIM1; k=rsa; p=MIGf MA0"]), "MIGfMA0")
@@ -152,6 +155,41 @@ class DkimTest(unittest.TestCase):
     def test_explicit_selector_found_passes(self):
         self.assertEqual(emailauth.check_dkim("example.com", {"mysel": "MIIB"}, explicit=True).status, PASS)
 
+
+
+class DmarcSubdomainPolicyTest(unittest.TestCase):
+    """RFC 7489 section 6.3: a subdomain inherits sp= from its organizational domain, else p=."""
+
+    def test_sp_applies_to_a_subdomain(self):
+        f = emailauth.check_dmarc("example.com", ["v=DMARC1; p=reject; sp=none"], domain="shop.example.com")
+        self.assertEqual(f.status, WARN)
+        self.assertIn("sp=none (the policy shop.example.com inherits as a subdomain)", f.detail)
+
+    def test_strict_sp_passes_a_subdomain_even_with_a_lax_p(self):
+        f = emailauth.check_dmarc("example.com", ["v=DMARC1; p=none; sp=reject"], domain="shop.example.com")
+        self.assertEqual(f.status, PASS)
+        self.assertIn("sp=reject applies to shop.example.com", f.detail)
+
+    def test_p_applies_to_a_subdomain_without_sp(self):
+        f = emailauth.check_dmarc("example.com", ["v=DMARC1; p=quarantine"], domain="shop.example.com")
+        self.assertEqual(f.status, PASS)
+        self.assertIn("p=quarantine applies to shop.example.com", f.detail)
+
+    def test_the_domain_itself_uses_p(self):
+        f = emailauth.check_dmarc("example.com", ["v=DMARC1; p=reject; sp=none"], domain="example.com")
+        self.assertEqual(f.status, PASS)
+
+    def test_invalid_sp_is_treated_as_p_none(self):
+        f = emailauth.check_dmarc("example.com", ["v=DMARC1; p=reject; sp=strict"], domain="shop.example.com")
+        self.assertEqual(f.status, WARN)
+        self.assertIn("not a valid policy", f.detail)
+
+    def test_invalid_sp_spoils_the_record_for_the_domain_itself_too(self):
+        # Section 6.6.3 step 6 applies to the whole record, not only to subdomains.
+        for domain in ("example.com", None):
+            f = emailauth.check_dmarc("example.com", ["v=DMARC1; p=reject; sp=bogus"], domain=domain)
+            self.assertEqual(f.status, WARN, domain)
+            self.assertIn("sp='bogus' is not a valid policy, so receivers treat the record as p=none", f.detail)
 
 if __name__ == "__main__":
     unittest.main()

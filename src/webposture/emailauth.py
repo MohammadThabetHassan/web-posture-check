@@ -6,23 +6,27 @@ is reported as skipped. The check_* functions take the TXT strings and need no
 network access.
 """
 
+from __future__ import annotations
+
+from collections.abc import Iterable, Mapping
+
 from .findings import FAIL, PASS, SKIPPED_PREFIX, WARN, Finding
 
 INSTALL_HINT = 'install the optional DNS support with: pip install "web-posture-check[dns]"'
 
 
-def mail_domain(host):
+def mail_domain(host: str | None) -> str:
     """The domain to check for a web host: www.example.com -> example.com."""
     host = (host or "").lower().rstrip(".")
     return host[4:] if host.startswith("www.") else host
 
 
-def spf_records(txt_strings):
+def spf_records(txt_strings: Iterable[str]) -> list[str]:
     """Return the TXT values that are SPF records (they start with 'v=spf1', RFC 7208 section 4.5)."""
     return [t for t in txt_strings if t.lower() == "v=spf1" or t.lower().startswith("v=spf1 ")]
 
 
-def check_spf(domain, txt_strings):
+def check_spf(domain: str, txt_strings: Iterable[str]) -> Finding:
     records = spf_records(txt_strings)
     if not records:
         return Finding("spf", WARN, f"{domain} has no SPF record, so anyone can send mail claiming to be from it (a domain that sends no mail should publish 'v=spf1 -all')")
@@ -46,24 +50,24 @@ def check_spf(domain, txt_strings):
     return Finding("spf", WARN, f"{domain} SPF has no 'all' mechanism, so mail from unlisted servers is treated as neutral: {record}")
 
 
-def lookup_txt(domain, timeout):
-    """Return (list of TXT strings, None), or (None, reason) when the lookup could not be done."""
+def lookup_txt(domain: str, timeout: float) -> tuple[list[str], str | None]:
+    """Return (TXT strings, None), or ([], reason) when the lookup could not be done."""
     try:
         import dns.exception
         import dns.resolver
     except ImportError:
-        return None, f"{SKIPPED_PREFIX} {INSTALL_HINT}"
+        return [], f"{SKIPPED_PREFIX} {INSTALL_HINT}"
     try:
         answer = dns.resolver.resolve(domain, "TXT", lifetime=timeout)
     except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
         return [], None
     except dns.exception.DNSException as err:
-        return None, f"DNS lookup for {domain} failed: {err.__class__.__name__}"
+        return [], f"DNS lookup for {domain} failed: {err.__class__.__name__}"
     # A TXT record can be split into several strings; they are joined without spaces (RFC 7208 section 3.3).
     return [b"".join(r.strings).decode("utf-8", errors="replace") for r in answer], None
 
 
-def dmarc_candidates(domain):
+def dmarc_candidates(domain: str) -> list[str]:
     """Domains whose _dmarc record applies, most specific first.
 
     Receivers fall back from a subdomain to the organizational domain
@@ -74,12 +78,12 @@ def dmarc_candidates(domain):
     return [".".join(labels[i:]) for i in range(max(len(labels) - 1, 1))]
 
 
-def dmarc_records(txt_strings):
+def dmarc_records(txt_strings: Iterable[str]) -> list[str]:
     return [t for t in txt_strings if t.replace(" ", "").lower().startswith("v=dmarc1")]
 
 
-def parse_dmarc_tags(record):
-    tags = {}
+def parse_dmarc_tags(record: str) -> dict[str, str]:
+    tags: dict[str, str] = {}
     for part in record.split(";"):
         key, sep, value = part.partition("=")
         if sep:
@@ -87,8 +91,13 @@ def parse_dmarc_tags(record):
     return tags
 
 
-def check_dmarc(found_on, txt_strings):
-    """found_on is the domain whose _dmarc record was read, or None if no domain had one."""
+def check_dmarc(found_on: str | None, txt_strings: Iterable[str], domain: str | None = None) -> Finding:
+    """found_on is the domain whose _dmarc record was read, or None if no domain had one.
+
+    domain is the mail domain being checked. When the record was found on a
+    parent of it (an organizational domain), the subdomain policy sp= applies,
+    falling back to p= when sp= is absent (RFC 7489 section 6.3).
+    """
     if found_on is None:
         return Finding("dmarc", WARN, "no DMARC record, so receivers get no instruction for mail that fails SPF and DKIM")
     records = dmarc_records(txt_strings)
@@ -97,18 +106,26 @@ def check_dmarc(found_on, txt_strings):
         return Finding("dmarc", FAIL, f"_dmarc.{found_on} has {len(records)} DMARC records, so receivers apply no DMARC policy")
     record = records[0]
     tags = parse_dmarc_tags(record)
-    policy = tags.get("p", "").lower()
+    inherited = domain is not None and domain != found_on
+    tag = "sp" if inherited and "sp" in tags else "p"
+    applies = f" (the policy {domain} inherits as a subdomain)" if inherited else ""
+    policy = tags.get(tag, "").lower()
+    policies = ("none", "quarantine", "reject")
     problems = []
-    if policy not in ("none", "quarantine", "reject"):
+    # Section 6.6.3, step 6: a record without a valid p=, or with an invalid sp=,
+    # is handled as if it said p=none, whichever domain it applies to.
+    if tags.get("p", "").lower() not in policies:
         problems.append(f"no valid p= tag ('{tags.get('p', '')}'), so receivers treat it as p=none")
+    elif "sp" in tags and tags["sp"].lower() not in policies:
+        problems.append(f"sp={tags['sp']!r} is not a valid policy, so receivers treat the record as p=none")
     elif policy == "none":
-        problems.append("p=none only monitors; spoofed mail is still delivered")
+        problems.append(f"{tag}=none{applies} only monitors; spoofed mail is still delivered")
     pct = tags.get("pct")
     if pct is not None and pct != "100":
         problems.append(f"pct={pct} applies the policy to only part of the failing mail")
     if problems:
         return Finding("dmarc", WARN, f"_dmarc.{found_on}: " + "; ".join(problems) + f": {record}")
-    return Finding("dmarc", PASS, f"_dmarc.{found_on}: {record}")
+    return Finding("dmarc", PASS, f"_dmarc.{found_on}{f' ({tag}={policy} applies to {domain})' if inherited else ''}: {record}")
 
 
 # Selectors used by common mail providers: Google Workspace, Microsoft 365
@@ -117,7 +134,7 @@ def check_dmarc(found_on, txt_strings):
 COMMON_DKIM_SELECTORS = ("google", "selector1", "selector2", "k1", "s1", "s2", "default", "dkim", "mail", "cf2024-1")
 
 
-def parse_dkim_key(txt_strings):
+def parse_dkim_key(txt_strings: Iterable[str]) -> str | None:
     """Return the p= value of the first DKIM key record, or None if there is none.
 
     Only records with a p= tag count, so unrelated TXT records (or wildcard
@@ -130,7 +147,7 @@ def parse_dkim_key(txt_strings):
     return None
 
 
-def check_dkim(domain, keys, explicit):
+def check_dkim(domain: str, keys: Mapping[str, str | None], explicit: bool) -> Finding:
     """keys maps each selector tried to its p= value ('' revoked) or None (no key).
 
     explicit is True when the user named the selectors, so a missing one is

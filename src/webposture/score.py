@@ -13,13 +13,17 @@ Because the score is an average, it works the same for any --only/--skip
 selection.
 """
 
-from .findings import FAIL, PASS, SKIPPED_PREFIX, WARN
+from __future__ import annotations
+
+from collections.abc import Iterable
+
+from .findings import FAIL, PASS, SKIPPED_PREFIX, WARN, Finding
 
 POINTS = {PASS: 1.0, WARN: 0.5, FAIL: 0.0}
 GRADES = ((90, "A"), (80, "B"), (70, "C"), (60, "D"))
 
 
-def compute(findings):
+def compute(findings: Iterable[Finding]) -> tuple[int, str] | None:
     """Return (score, grade), or None when there is nothing to score."""
     scored = [f for f in findings if f.status in POINTS and not f.detail.startswith(SKIPPED_PREFIX)]
     if not scored:
