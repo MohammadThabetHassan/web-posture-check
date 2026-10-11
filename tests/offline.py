@@ -103,7 +103,8 @@ def install() -> None:
                 _check(rest[2])
             return real_sendmsg(self, buffers, *rest)
 
-        socket.socket.sendmsg = sendmsg  # type: ignore[method-assign]
+        # setattr: sendmsg exists only on Unix, so a direct assignment type-checks differently per platform.
+        setattr(socket.socket, "sendmsg", sendmsg)  # noqa: B010
 
 
 def main(argv: list[str]) -> int:
