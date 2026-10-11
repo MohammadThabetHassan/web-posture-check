@@ -92,10 +92,12 @@ runs:
         touch "$report"
         cat "$report"
         cat "$report" >> "$GITHUB_STEP_SUMMARY"
-        # Lowest score and worst grade across every "**Grade X** (N/100)" line of the report.
+        # Lowest score and worst grade across the report's "**Grade X** (N/100)" summary
+        # lines. Only a line that starts with it counts: text quoted from a site sits
+        # inside a table row, so a site cannot add a grade of its own.
         python - "$report" >> "$GITHUB_OUTPUT" <<'PY'
         import re, sys
-        found = re.findall(r"\*\*Grade ([A-F])\*\* \((\d+)/100\)", open(sys.argv[1], encoding="utf-8").read())
+        found = re.findall(r"^\*\*Grade ([A-F])\*\* \((\d+)/100\)", open(sys.argv[1], encoding="utf-8").read(), re.M)
         print("score=" + (str(min(int(s) for _, s in found)) if found else ""))
         print("grade=" + (max(g for g, _ in found) if found else ""))
         PY

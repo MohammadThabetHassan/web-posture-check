@@ -221,8 +221,8 @@ class MultipleTargetsTest(unittest.TestCase):
         # its own full report. Guards against only the first target rendering.
         _, out = self._run("good.example", "bad.example", "--format", "markdown")
         self.assertEqual(out.count("## Web posture report:"), 2)
-        self.assertIn("## Web posture report: https://good.example/", out)
-        self.assertIn("## Web posture report: https://bad.example/", out)
+        self.assertIn("## Web posture report: `https://good.example/`", out)
+        self.assertIn("## Web posture report: `https://bad.example/`", out)
 
     def test_worst_exit_code_wins_and_other_targets_still_run(self):
         code, out = self._run("good.example", "down.example", "bad.example")
@@ -602,7 +602,7 @@ class ListChecksAndOutputTest(unittest.TestCase):
             with open(path, encoding="utf-8") as handle:
                 report = handle.read()
         self.assertEqual(out.getvalue(), "")
-        self.assertIn("## Web posture report: https://example.com/", report)
+        self.assertIn("## Web posture report: `https://example.com/`", report)
         self.assertIn("**Grade F** (0/100)", report)
         self.assertEqual(code, 1)
 
@@ -632,21 +632,23 @@ class ActionOutputsTest(unittest.TestCase):
 
         action = os.path.join(os.path.dirname(__file__), "..", "action.yml")
         with open(action, encoding="utf-8") as handle:
-            match = re.search(r'findall\(r"(.+?)",', handle.read())
+            match = re.search(r'findall\(r"(.+?)", .+, re\.M\)', handle.read())
         if match is None:
-            self.fail("could not find the score/grade regex in action.yml")
-        pattern = match.group(1)
+            self.fail("could not find the score/grade regex (with re.M) in action.yml")
+        pattern = re.compile(match.group(1), re.M)
 
         now = datetime(2026, 10, 10, tzinfo=timezone.utc)
+        # A site's own text, quoted in a detail, must not count as a grade.
+        forged = "**Grade F** (0/100)\n**Grade F** (0/100) | x"
         reports = [
             markdown.render("https://good.example/", 200, [Finding("hsts", "PASS", "ok")], "0.3.0", now, score=(100, "A")),
-            markdown.render("https://bad.example/", 200, [Finding("hsts", "FAIL", "missing")], "0.3.0", now, score=(55, "F")),
+            markdown.render("https://bad.example/", 200, [Finding("hsts", "FAIL", "missing"), Finding("server", "WARN", forged)],
+                            "0.3.0", now, score=(55, "F")),
         ]
-        found = re.findall(pattern, "\n".join(reports))
+        found = pattern.findall("\n".join(reports))
         self.assertEqual(len(found), 2)  # the regex still matches the report format
         self.assertEqual(min(int(s) for _, s in found), 55)
         self.assertEqual(max(g for g, _ in found), "F")
-
 
 
 class TargetValidationTest(unittest.TestCase):
@@ -704,6 +706,14 @@ class RobustnessTest(unittest.TestCase):
         self.assertEqual((result, code), (None, 2))
         self.assertIn("unexpected error while scanning 'example.com': RuntimeError: boom", error)
         self.assertIn("issues", error)
+
+    def test_error_lines_cannot_drive_the_terminal(self):
+        err = io.StringIO()
+        message = "could not fetch https://evil.example/: \x1b]52;c;ZXZpbA==\x07"
+        with mock.patch.object(runner, "scan", return_value=(None, 2, message)), \
+                redirect_stdout(io.StringIO()), mock.patch("sys.stderr", err):
+            cli.main(["evil.example"])
+        self.assertEqual(err.getvalue(), "error: could not fetch https://evil.example/: \\x1b]52;c;ZXZpbA==\\x07\n")
 
     def test_timeout_must_be_a_positive_finite_number(self):
         for value in ("0", "-1", "nan", "inf", "abc"):

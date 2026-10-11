@@ -11,6 +11,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 
 from . import __version__, output, runner
+from .textsafe import printable
 
 # More than this many simultaneous scans gains little and looks like a flood to the sites.
 MAX_JOBS = 16
@@ -174,7 +175,7 @@ def main(argv=None):
         codes.append(code)
         if error:
             errors.append(error)
-            print(f"error: {error}", file=sys.stderr)
+            print(f"error: {printable(error)}", file=sys.stderr)
         if result is not None:
             results.append(result)
     text = output.render(args.format, results, single=len(targets) == 1, errors=errors, sarif_anchor=args.sarif_location)

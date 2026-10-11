@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timezone
 
 from . import __version__, markdown, runner, sarif, score
+from .textsafe import printable
 
 
 def to_json(result):
@@ -17,14 +18,15 @@ def to_json(result):
 
 
 def to_text(result):
+    """A plain-text report. Text the site controls is escaped, so it cannot drive the terminal."""
     status = result["status"]
-    lines = [f"Target: {result['url']} ({f'HTTP {status}' if status is not None else 'no HTTP response'})"]
+    lines = [f"Target: {printable(result['url'])} ({f'HTTP {status}' if status is not None else 'no HTTP response'})"]
     result_score = score.compute(result["findings"])
     if result_score:
         lines.append(f"Score: {result_score[0]}/100 (grade {result_score[1]})")
-    lines += [f"  [{f.status:4}] {f.check}: {f.detail}" for f in result["findings"]]
+    lines += [f"  [{f.status:4}] {f.check}: {printable(f.detail)}" for f in result["findings"]]
     if result["note"]:
-        lines.append(f"  ({result['note']})")
+        lines.append(f"  ({printable(result['note'])})")
     return "\n".join(lines)
 
 

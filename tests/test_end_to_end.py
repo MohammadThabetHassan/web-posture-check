@@ -84,6 +84,23 @@ class _ErrorSite(BaseHTTPRequestHandler):
         pass
 
 
+class _HostileSite(BaseHTTPRequestHandler):
+    """Puts terminal control sequences and Markdown into the values the report quotes."""
+
+    # OSC 52 asks the terminal to put "evil" on the clipboard; CSI 2J clears the screen.
+    SERVER = "nginx/1.25 \x1b]52;c;ZXZpbA==\x07\x1b[2J <img src=https://evil.example/p.png> @octocat"
+
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Server", self.SERVER)
+        self.send_header("Set-Cookie", "\x1b[31mred=1; Path=/")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+
 class EndToEndTest(unittest.TestCase):
     def _serve(self, handler):
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
@@ -125,7 +142,7 @@ class EndToEndTest(unittest.TestCase):
         good, bad = self._serve(_GoodSite), self._serve(_BadSite)
         code, out = self._run(good, bad, "--format", "markdown")
         self.assertEqual(out.count("## Web posture report:"), 2)
-        self.assertIn(f"## Web posture report: {good}", out)
+        self.assertIn(f"## Web posture report: `{good}`", out)
         self.assertIn("**Grade A** (100/100)", out)
         self.assertIn("| FAIL | `cors` |", out)
         self.assertEqual(code, 1)
@@ -159,7 +176,6 @@ class EndToEndTest(unittest.TestCase):
         self.assertIn(f"{url} is served over plain HTTP", finding["detail"])
         self.assertEqual(code, 1)
 
-
     def test_hsts_over_plain_http_fails(self):
         # The good site sends a valid Strict-Transport-Security header, but over
         # plain HTTP, where browsers ignore it (RFC 6797 section 8.1).
@@ -169,6 +185,26 @@ class EndToEndTest(unittest.TestCase):
         finding = json.loads(out.getvalue())["findings"][0]
         self.assertEqual((finding["status"], code), ("FAIL", 1))
         self.assertIn("plain HTTP", finding["detail"])
+
+    def test_a_hostile_site_cannot_drive_the_terminal_or_the_markdown(self):
+        url = self._serve(_HostileSite)
+        for output_format in ("text", "markdown"):
+            out = io.StringIO()
+            with redirect_stdout(out):
+                cli.main([url, "--only", "information-leakage,cookies", "--format", output_format,
+                          "--retries", "0", "--timeout", "5"])
+            report = out.getvalue()
+            self.assertNotIn("\x1b", report, output_format)
+            self.assertNotIn("\x07", report, output_format)
+            self.assertIn("nginx/1.25 \\x1b]52;c;ZXZpbA==\\x07\\x1b[2J <img", report, output_format)
+            self.assertIn("\\x1b[31mred: missing HttpOnly", report, output_format)
+        # In Markdown the quoted text is a code span, shown literally wherever it is rendered.
+        # (http.server sends its own Server header first, with the Python version in it.)
+        row = next(line for line in report.splitlines() if "`information-leakage`" in line)
+        self.assertTrue(row.startswith("| WARN | `information-leakage` | `response discloses the server stack (Server: "), row)
+        self.assertTrue(row.endswith("; Server: nginx/1.25 \\x1b]52;c;ZXZpbA==\\x07\\x1b[2J "
+                                     "<img src=https://evil.example/p.png> @octocat)` |"), row)
+
 
 if __name__ == "__main__":
     unittest.main()

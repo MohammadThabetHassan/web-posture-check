@@ -23,18 +23,18 @@ def render(findings=FINDINGS, **kwargs):
 class RenderTest(unittest.TestCase):
     def test_header_and_summary(self):
         out = render()
-        self.assertTrue(out.startswith("## Web posture report: https://example.com/\n"))
+        self.assertTrue(out.startswith("## Web posture report: `https://example.com/`\n"))
         self.assertIn("HTTP 200, generated 2026-10-10 09:30 UTC by web-posture-check 0.1.0", out)
         self.assertIn("**2 FAIL**, **1 WARN**, 1 PASS", out)
 
     def test_table_rows_put_failures_first_and_keep_order_within_a_status(self):
         rows = [line for line in render().splitlines() if line.startswith("| ") and "`" in line]
         self.assertEqual([r.split("`")[1] for r in rows], ["csp", "https-redirect", "cookies", "hsts"])
-        self.assertIn("| FAIL | `csp` | Content-Security-Policy header is missing |", rows[0])
+        self.assertIn("| FAIL | `csp` | `Content-Security-Policy header is missing` |", rows[0])
 
     def test_pipes_and_newlines_cannot_break_the_table(self):
         out = render([Finding("cors", WARN, "a | b\nc")])
-        self.assertIn("| WARN | `cors` | a \\| b c |", out)
+        self.assertIn("| WARN | `cors` | `a \\| b c` |", out)
 
     def test_note_and_missing_status(self):
         out = markdown.render("https://bad.example/", None, [Finding("tls-certificate", FAIL, "expired")], "0.1.0", WHEN,
@@ -55,6 +55,45 @@ class RenderTest(unittest.TestCase):
         self.assertTrue(render().isascii())
 
 
+class HostileTextTest(unittest.TestCase):
+    """What a site sends must show literally, never as a link, image, HTML, mention or new cell.
+
+    GitHub renders the report in job summaries, issues and pull requests, where
+    a backslash escape can be undone by an autolinked URL, and @mentions and
+    issue references are linked after rendering; only a code span stays literal.
+    """
+
+    def _row(self, detail):
+        return render([Finding("information-leakage", WARN, detail)]).splitlines()[-1]
+
+    def test_details_are_code_spans(self):
+        for detail in ("<img src=https://evil.example/p.png>", "[click](https://evil.example)",
+                       "![x](https://evil.example/p.png)", "ping @octocat about #1", "**Grade A** (100/100)",
+                       "https://evil.example/\\<img src=x>", "~~struck~~ _em_"):
+            self.assertEqual(self._row(detail), f"| WARN | `information-leakage` | `{detail}` |", detail)
+
+    def test_backticks_inside_get_a_longer_fence(self):
+        self.assertEqual(self._row("a ` b"), "| WARN | `information-leakage` | ``a ` b`` |")
+        self.assertEqual(self._row("has `` two"), "| WARN | `information-leakage` | ```has `` two``` |")
+        # Renderers strip one space at each end, which keeps an edge backtick off the fence.
+        self.assertEqual(self._row("`x`"), "| WARN | `information-leakage` | `` `x` `` |")
+
+    def test_pipes_stay_in_their_cell(self):
+        # GitHub's table parser treats every \\| as a literal | and removes one backslash.
+        self.assertEqual(self._row("a|b a\\|b"), "| WARN | `information-leakage` | `a\\|b a\\\\|b` |")
+
+    def test_control_characters_are_visible(self):
+        row = self._row("nginx/1.25 \x1b]52;c;ZXZpbA==\x07 \u202e")
+        self.assertEqual(row, "| WARN | `information-leakage` | `nginx/1.25 \\x1b]52;c;ZXZpbA==\\x07 \\u202e` |")
+
+    def test_empty_detail_is_an_empty_cell(self):
+        self.assertEqual(self._row(" \n "), "| WARN | `information-leakage` |  |")
+
+    def test_url_in_the_heading_is_a_code_span_without_escaped_pipes(self):
+        out = markdown.render("https://example.com/?a=1|2&b=<i>", 200, [], "0.1.0", WHEN)
+        self.assertTrue(out.startswith("## Web posture report: `https://example.com/?a=1|2&b=<i>`\n"))
+
+
 class FormatOptionTest(unittest.TestCase):
     def _run(self, *argv):
         out = io.StringIO()
@@ -66,7 +105,7 @@ class FormatOptionTest(unittest.TestCase):
     def test_format_markdown(self):
         code, out = self._run("--format", "markdown")
         self.assertEqual(code, 1)
-        self.assertIn("## Web posture report: https://example.com/", out)
+        self.assertIn("## Web posture report: `https://example.com/`", out)
         self.assertIn("| FAIL | `hsts` |", out)
 
     def test_json_flag_still_works_as_a_shortcut(self):

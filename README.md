@@ -171,10 +171,10 @@ If nothing answers on plain HTTP at all, `https-redirect` passes, since nothing 
 
 ## Reports, score and exit codes
 
-**Formats.** `text` (default) prints one line per finding. `sarif` is a SARIF 2.1.0 log for [GitHub code scanning](#github-code-scanning) and other SARIF viewers. `json` gives `url`, `status`, `findings`, `score` and `grade` (plus `note` when checks were skipped or ran with `--insecure`); several targets give `{"results": [...]}`. `markdown` is a report for tickets, pull requests and emails, with failures first:
+**Formats.** `text` (default) prints one line per finding. `sarif` is a SARIF 2.1.0 log for [GitHub code scanning](#github-code-scanning) and other SARIF viewers. `json` gives `url`, `status`, `findings`, `score` and `grade` (plus `note` when checks were skipped or ran with `--insecure`); several targets give `{"results": [...]}`. `markdown` is a report for tickets, pull requests and emails, with failures first. The URL and the details are code spans, so text a site sends is shown literally and cannot add links, images, HTML or @mentions:
 
 ```markdown
-## Web posture report: https://example.com
+## Web posture report: `https://example.com/`
 
 HTTP 200, generated 2026-10-10 15:50 UTC by web-posture-check 0.3.0
 
@@ -182,11 +182,11 @@ HTTP 200, generated 2026-10-10 15:50 UTC by web-posture-check 0.3.0
 
 | Status | Check | Detail |
 |---|---|---|
-| FAIL | `hsts` | Strict-Transport-Security header is missing |
-| FAIL | `csp` | Content-Security-Policy header is missing |
-| FAIL | `https-redirect` | http://example.com/ is served over plain HTTP without redirecting to HTTPS |
-| PASS | `http-status` | final response is HTTP 200 |
-| PASS | `tls-certificate` | certificate valid until 2026-12-25 (76 days) |
+| FAIL | `hsts` | `Strict-Transport-Security header is missing` |
+| FAIL | `csp` | `Content-Security-Policy header is missing` |
+| FAIL | `https-redirect` | `http://example.com/ is served over plain HTTP without redirecting to HTTPS` |
+| PASS | `http-status` | `final response is HTTP 200` |
+| PASS | `tls-certificate` | `certificate valid until 2026-12-25 (76 days)` |
 ```
 
 **Score and grade.** Each check counts 1 for PASS, 0.5 for WARN and 0 for FAIL, averaged to 100, so it means the same for any `--only` / `--skip` selection. A is 90 and above, B 80, C 70, D 60, F below. **A needs zero FAILs**: one serious problem cannot hide behind many passes. Skipped checks are shown but not scored.
