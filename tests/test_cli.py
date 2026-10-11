@@ -798,12 +798,28 @@ class RobustnessTest(unittest.TestCase):
         skipping = cli.scan_options(cli.build_parser().parse_args(["x", "--skip", "hsts"]))
         self.assertEqual((skipping.wanted("hsts"), skipping.wanted("csp")), (False, True))
 
-    def test_ctrl_c_exits_130_without_waiting(self):
+    def test_ctrl_c_exits_130_without_waiting_for_running_scans(self):
+        # Ctrl-C arrives while another scan is still running and would hold the
+        # pool for 30 s. Leaving at once is the point: code that waited for the
+        # running scans (a "with ThreadPoolExecutor()" block) would fail here.
+        started, release = threading.Event(), threading.Event()
+        self.addCleanup(release.set)
+
+        def scan(target, options):
+            if target == "slow.example":
+                started.set()
+                release.wait(30)
+                return runner.failed(target, "released"), 2
+            started.wait(10)
+            raise KeyboardInterrupt
+
         err = io.StringIO()
-        with mock.patch.object(runner, "scan", side_effect=KeyboardInterrupt), \
+        begin = time.monotonic()
+        with mock.patch.object(runner, "scan", side_effect=scan), \
                 mock.patch.object(cli, "exit_now", side_effect=SystemExit) as exit_now, \
                 mock.patch("sys.stderr", err), self.assertRaises(SystemExit):
-            cli.main(["example.com"])
+            cli.main(["fast.example", "slow.example"])
+        self.assertLess(time.monotonic() - begin, 10)
         exit_now.assert_called_once_with(130)
         self.assertIn("interrupted", err.getvalue())
 
