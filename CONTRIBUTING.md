@@ -36,6 +36,11 @@ coverage, builds and installs the package, and runs the GitHub Action from the c
   that runs it (`headers.run` for a response header, otherwise `runner.run_checks`), with its FAIL and
   WARN rules in the README.
 - **Annotate new code.** mypy checks the package with its strict options.
+- **Check browser behaviour in a browser.** A rule that says what browsers do must be checked in Chromium,
+  Firefox and WebKit (Playwright can answer every request locally with `page.route`), not only from a spec
+  or a source file: Chromium's source suggested empty HSTS values were accepted, and the browser rejects them.
+- **Refresh the Public Suffix List** now and then, and before a release:
+  `curl -fsSL https://publicsuffix.org/list/public_suffix_list.dat -o src/webposture/public_suffix_list.dat`
 - **Treat what a site sends as hostile.** Findings quote it; the text and Markdown reports escape it
   (`textsafe.printable`), and a new output format must too.
 - **Never report a false PASS.** If a check cannot decide (a lookup failed, the local OpenSSL cannot test
