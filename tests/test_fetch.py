@@ -1,7 +1,10 @@
+import contextlib
+import gc
 import socket
 import threading
 import unittest
 import urllib.error
+import warnings
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from webposture import cookies, fetch, runner, transport
@@ -42,6 +45,11 @@ class _Chain(BaseHTTPRequestHandler):
         if self.path == "/loop":
             self.send_response(302)
             self.send_header("Location", "/loop")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if self.path == "/missing":
+            self.send_response(404)
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
@@ -118,6 +126,27 @@ class FetchHeadersTest(_LocalServerTest):
         with self.assertRaises(urllib.error.URLError) as caught:
             fetch_headers(self._serve(_Chain) + "/loop", timeout=5)
         self.assertIn("redirect loop", str(caught.exception.reason))
+
+    def test_error_pages_and_failed_redirects_release_their_connection(self):
+        # urllib raises an HTTPError that holds the open response; it must be
+        # closed, or each such request leaves a socket open until it is collected.
+        base = self._serve(_Chain)
+        calls = {
+            "headers of a 404": lambda: fetch_headers(base + "/missing", timeout=5),
+            "headers after a loop": lambda: fetch_headers(base + "/loop", timeout=5),
+            "headers after a refused redirect": lambda: fetch_headers(self._redirect_to("file:///etc/passwd"), timeout=5),
+            "text of a 404": lambda: fetch.fetch_text(base + "/missing", 5, 1024),
+            "text after a loop": lambda: fetch.fetch_text(base + "/loop", 5, 1024),
+            "final URL of a 404": lambda: fetch_final_url(base + "/missing", timeout=5),
+            "final URL after a loop": lambda: fetch_final_url(base + "/loop", timeout=5),
+        }
+        for name, call in calls.items():
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always", ResourceWarning)
+                with contextlib.suppress(urllib.error.URLError):
+                    call()
+                gc.collect()
+            self.assertEqual([str(w.message) for w in caught if w.category is ResourceWarning], [], name)
 
     def test_a_redirect_without_location_is_the_final_response(self):
         result = fetch_headers(self._serve(_Chain) + "/no-location", timeout=5)

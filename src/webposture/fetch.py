@@ -134,11 +134,13 @@ def fetch_headers(url: str, timeout: float, extra_headers: dict[str, str] | None
         with _opener(recorder, context).open(_request(url, extra_headers), timeout=timeout) as response:
             return _result(response.geturl(), response.headers, response.status, recorder)
     except urllib.error.HTTPError as err:
-        problem = _redirect_problem(err, recorder)
-        if problem:
-            raise problem from err
-        # Error pages still carry the site's headers, so check them anyway.
-        return _result(err.geturl(), err.headers, err.code, recorder)
+        # An HTTPError holds the open response; closing it releases the connection.
+        with err:
+            problem = _redirect_problem(err, recorder)
+            if problem:
+                raise problem from err
+            # Error pages still carry the site's headers, so check them anyway.
+            return _result(err.geturl(), err.headers, err.code, recorder)
 
 
 def fetch_text(url: str, timeout: float, limit: int, context: ssl.SSLContext | None = None) -> tuple[int | None, str | None, str]:
@@ -150,9 +152,10 @@ def fetch_text(url: str, timeout: float, limit: int, context: ssl.SSLContext | N
             body = response.read(limit).decode("utf-8", errors="replace")
             return response.status, response.headers.get("Content-Type"), body
     except urllib.error.HTTPError as err:
-        if _redirect_problem(err, recorder):
-            return None, None, ""
-        return err.code, err.headers.get("Content-Type"), ""
+        with err:
+            if _redirect_problem(err, recorder):
+                return None, None, ""
+            return err.code, err.headers.get("Content-Type"), ""
     except FETCH_ERRORS:
         return None, None, ""
 
@@ -166,7 +169,8 @@ def fetch_final_url(url: str, timeout: float, context: ssl.SSLContext | None = N
     except urllib.error.HTTPError as err:
         # An error page is still a response served at that URL; a refused or
         # looping redirect still pointed somewhere, which is what is reported.
-        return recorder.last_url if _redirect_problem(err, recorder) and recorder.last_url else str(err.geturl())
+        with err:
+            return recorder.last_url if _redirect_problem(err, recorder) and recorder.last_url else str(err.geturl())
     except FETCH_ERRORS:
         # The server answered with a redirect but the target failed, e.g. an
         # https:// URL with a broken certificate. The redirect still happened,
