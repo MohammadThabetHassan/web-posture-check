@@ -168,7 +168,7 @@ def check_spf(url: str, timeout: float) -> Finding:
     txt, problem = emailauth.lookup_txt(domain, timeout)
     if problem:
         return Finding("spf", WARN, problem)
-    return emailauth.check_spf(domain, txt)
+    return emailauth.check_spf(domain, txt, lookup=lambda name: emailauth.lookup_txt(name, timeout))
 
 
 def check_dmarc(url: str, timeout: float) -> Finding:

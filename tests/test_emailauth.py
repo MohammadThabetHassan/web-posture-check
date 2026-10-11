@@ -157,6 +157,69 @@ class DkimTest(unittest.TestCase):
 
 
 
+class SpfLookupLimitTest(unittest.TestCase):
+    """RFC 7208 section 4.6.4: more than 10 DNS-querying terms make SPF a permerror."""
+
+    def _lookup(self, records):
+        def lookup(name):
+            if name == "broken.example":
+                return [], "DNS lookup for broken.example failed: Timeout"
+            return records.get(name, []), None
+        return lookup
+
+    def _check(self, record, records=None):
+        return emailauth.check_spf("example.com", [record], lookup=self._lookup(records or {}))
+
+    def test_ten_lookups_pass_and_eleven_fail(self):
+        ten = "v=spf1 a mx ptr exists:e.example a:x.example a:w.example mx:y.example/24 a/24 mx/24 include:i.example ip4:192.0.2.1 -all"
+        f = self._check(ten, {"i.example": ["v=spf1 ip6:2001:db8::1 -all"]})
+        self.assertEqual(f.status, PASS)
+        self.assertIn("(10 of 10 DNS lookups)", f.detail)
+        f = self._check(ten.replace("-all", "exists:z.example -all"), {"i.example": ["v=spf1 -all"]})
+        self.assertEqual(f.status, FAIL)
+        self.assertIn("more than 10 DNS lookups", f.detail)
+
+    def test_included_records_count(self):
+        records = {f"i{n}.example": [f"v=spf1 include:i{n + 1}.example a ~all"] for n in range(6)}
+        f = self._check("v=spf1 include:i0.example -all", records)
+        self.assertEqual(f.status, FAIL)
+
+    def test_a_loop_runs_into_the_limit(self):
+        f = self._check("v=spf1 include:loop.example -all", {"loop.example": ["v=spf1 include:loop.example -all"]})
+        self.assertEqual(f.status, FAIL)
+        self.assertIn("more than 10", f.detail)
+
+    def test_redirect_counts_only_without_all(self):
+        records = {"r.example": ["v=spf1 a -all"]}
+        self.assertIn("(2 of 10 DNS lookups)", self._check("v=spf1 redirect=r.example", records).detail)
+        self.assertNotIn("DNS lookups", self._check("v=spf1 -all redirect=r.example", records).detail)
+        self.assertNotIn("DNS lookups", self._check("v=spf1 ip4:192.0.2.0/24 exp=explain.example -all").detail)
+
+    def test_an_include_without_one_spf_record_is_a_permerror(self):
+        f = self._check("v=spf1 include:none.example -all")
+        self.assertEqual(f.status, FAIL)
+        self.assertIn("includes none.example (no SPF record)", f.detail)
+        f = self._check("v=spf1 include:two.example -all", {"two.example": ["v=spf1 -all", "v=spf1 ~all"]})
+        self.assertIn("includes two.example (2 SPF records)", f.detail)
+
+    def test_a_failed_lookup_means_the_limit_was_not_verified(self):
+        f = self._check("v=spf1 include:broken.example -all")
+        self.assertEqual(f.status, WARN)
+        self.assertIn("the 10-lookup limit could not be checked: DNS lookup for broken.example failed", f.detail)
+        # A finding that already warns keeps its own status.
+        self.assertEqual(self._check("v=spf1 include:broken.example ?all").status, WARN)
+
+    def test_a_macro_include_is_counted_once_as_a_lower_bound(self):
+        f = self._check("v=spf1 include:%{i}._ip.%{d}._spf.example -all")
+        self.assertEqual(f.status, PASS)
+        self.assertIn("(at least 1 of 10 DNS lookups)", f.detail)
+
+    def test_a_record_that_already_fails_is_not_counted(self):
+        f = self._check("v=spf1 include:i.example +all")
+        self.assertEqual(f.status, FAIL)
+        self.assertIn("authorises every server", f.detail)
+
+
 class DmarcCandidatesTest(unittest.TestCase):
     def test_the_walk_stops_at_the_organizational_domain(self):
         self.assertEqual(emailauth.dmarc_candidates("shop.example.co.uk"), ["shop.example.co.uk", "example.co.uk"])

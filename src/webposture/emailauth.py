@@ -8,7 +8,8 @@ network access.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from typing import NamedTuple
 
 from . import publicsuffix
 from .findings import FAIL, PASS, SKIPPED_PREFIX, WARN, Finding
@@ -27,7 +28,106 @@ def spf_records(txt_strings: Iterable[str]) -> list[str]:
     return [t for t in txt_strings if t.lower() == "v=spf1" or t.lower().startswith("v=spf1 ")]
 
 
-def check_spf(domain: str, txt_strings: Iterable[str]) -> Finding:
+# RFC 7208 section 4.6.4: at most 10 terms that query DNS in one evaluation.
+SPF_LOOKUP_LIMIT = 10
+_LOOKUP_MECHANISMS = frozenset({"include", "a", "mx", "ptr", "exists"})
+
+# A TXT lookup: name -> (TXT strings, None) or ([], why it failed), as lookup_txt returns.
+TxtLookup = Callable[[str], "tuple[list[str], str | None]"]
+
+
+class SpfLookups(NamedTuple):
+    """What counting an SPF record's DNS lookups found."""
+
+    # Terms that query DNS, across the record and those it includes or redirects to;
+    # counting stops once it passes the limit.
+    lookups: int
+    # An included or redirected domain with no SPF record, or several: a permerror of its own.
+    broken: str | None = None
+    # Why a record needed for counting could not be read (the count is then a lower bound).
+    problem: str | None = None
+    # True when an include or redirect uses a macro (%{...}), which depends on the sender.
+    macro: bool = False
+
+
+def _spf_terms(record: str) -> Iterator[tuple[str, str, bool]]:
+    """(lower-case name, value, is_modifier) for each term after "v=spf1"."""
+    for term in record.split()[1:]:
+        name, sep, value = term.partition("=")
+        if sep and ":" not in name and "/" not in name:
+            yield name.lower(), value, True
+            continue
+        body = term.lstrip("+-~?")
+        name, _, value = body.partition(":")
+        yield name.split("/", 1)[0].lower(), value, False
+
+
+def spf_lookups(record: str, lookup: TxtLookup, limit: int = SPF_LOOKUP_LIMIT) -> SpfLookups:
+    """Count the terms that query DNS (include, a, mx, ptr, exists, and redirect when there
+    is no "all") in record and in every record it includes or redirects to (RFC 7208
+    section 4.6.4). A loop counts until it passes the limit, as it does for a receiver.
+    """
+    count = 0
+    broken: str | None = None
+    problem: str | None = None
+    macro = False
+
+    def walk(text: str) -> None:
+        nonlocal count, broken, problem, macro
+        terms = list(_spf_terms(text))
+        has_all = any(name == "all" and not modifier for name, _, modifier in terms)
+        for name, value, modifier in terms:
+            counted = name in _LOOKUP_MECHANISMS if not modifier else name == "redirect" and not has_all
+            if not counted:
+                continue
+            count += 1
+            if count > limit:
+                return
+            # Only include and redirect pull in another record; once the answer is known, stop asking DNS.
+            if name not in ("include", "redirect") or broken or problem:
+                continue
+            if "%{" in value:
+                macro = True
+                continue
+            txt, failure = lookup(value)
+            if failure:
+                problem = failure
+                continue
+            records = spf_records(txt)
+            if len(records) != 1:
+                broken = f"{value} ({'no SPF record' if not records else f'{len(records)} SPF records'})"
+                continue
+            walk(records[0])
+            if count > limit:
+                return
+
+    walk(record)
+    return SpfLookups(count, broken, problem, macro)
+
+
+def check_spf(domain: str, txt_strings: Iterable[str], lookup: TxtLookup | None = None) -> Finding:
+    """Check a domain's SPF record. With lookup, also count its DNS lookups (RFC 7208 section 4.6.4)."""
+    finding = _check_spf_record(domain, txt_strings)
+    if lookup is None or finding.status == FAIL or not spf_records(txt_strings):
+        return finding
+    record = spf_records(txt_strings)[0]
+    found = spf_lookups(record, lookup)
+    if found.lookups > SPF_LOOKUP_LIMIT:
+        return Finding("spf", FAIL, f"{domain} SPF needs more than {SPF_LOOKUP_LIMIT} DNS lookups (RFC 7208 section 4.6.4), "
+                                    f"so receivers return permerror and ignore it: {record}")
+    if found.broken:
+        return Finding("spf", FAIL, f"{domain} SPF includes {found.broken}, so receivers that reach it return "
+                                    f"permerror and ignore SPF: {record}")
+    if found.problem:
+        return Finding("spf", WARN if finding.status == PASS else finding.status,
+                       f"{finding.detail}; the {SPF_LOOKUP_LIMIT}-lookup limit could not be checked: {found.problem}")
+    if found.lookups:
+        at_least = "at least " if found.macro else ""
+        return Finding("spf", finding.status, f"{finding.detail} ({at_least}{found.lookups} of {SPF_LOOKUP_LIMIT} DNS lookups)")
+    return finding
+
+
+def _check_spf_record(domain: str, txt_strings: Iterable[str]) -> Finding:
     records = spf_records(txt_strings)
     if not records:
         return Finding("spf", WARN, f"{domain} has no SPF record, so anyone can send mail claiming to be from it (a domain that sends no mail should publish 'v=spf1 -all')")
