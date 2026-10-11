@@ -113,5 +113,28 @@ class FetchFailureTest(unittest.TestCase):
         self.assertEqual(fetch.fetch_text(f"http://127.0.0.1:{port}/.well-known/security.txt", 5, 1024), (None, None, ""))
 
 
+
+class DnsApplicabilityTest(unittest.TestCase):
+    """An IP address or a single-label host has no domain records, so the DNS checks are skipped, not scored."""
+
+    def test_ip_addresses_and_single_label_hosts_are_skipped(self):
+        for url in ("https://127.0.0.1/", "http://[::1]:8443/x", "https://203.0.113.7:8443/", "http://localhost:8080/"):
+            for check in (runner.check_spf, runner.check_dmarc, runner.check_dkim, runner.check_caa):
+                with mock.patch.object(emailauth, "lookup_txt") as lookup, mock.patch.object(caa, "lookup_caa") as caa_lookup:
+                    finding = check(url, 5)
+                lookup.assert_not_called()
+                caa_lookup.assert_not_called()
+                self.assertEqual(finding.status, WARN, url)
+                self.assertTrue(finding.detail.startswith("skipped:"), finding.detail)
+
+    def test_skipped_dns_checks_leave_the_score_and_exit_code_alone(self):
+        from webposture import score
+        findings = [runner.check_spf("https://127.0.0.1/", 5), runner.check_caa("https://127.0.0.1/", 5)]
+        self.assertIsNone(score.compute(findings))
+        self.assertEqual(runner.exit_code(findings, "warn"), 0)
+
+    def test_a_domain_name_is_looked_up(self):
+        self.assertIsNone(runner.dns_not_applicable("https://www.example.com/"))
+
 if __name__ == "__main__":
     unittest.main()

@@ -7,6 +7,7 @@ Requests go through the fetch module by attribute (fetch.fetch_headers, ...),
 so a test that patches the fetch module intercepts every caller.
 """
 
+import ipaddress
 import ssl
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
@@ -94,8 +95,29 @@ def check_security_txt(url, timeout, context=None):
     return securitytxt.check_security_txt(status, content_type, body, now=datetime.now(timezone.utc))
 
 
+def dns_not_applicable(url):
+    """Why the DNS checks do not apply to url's host, as a skipped detail, or None when they do.
+
+    An IP address has no domain to look up, and a name without a dot (localhost,
+    an intranet host) is not a public domain with mail or certificate records.
+    """
+    host = (urlsplit(url).hostname or "").rstrip(".")
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        pass
+    else:
+        return f"{SKIPPED_PREFIX} {host} is an IP address, so there is no domain to look up"
+    if "." not in host:
+        return f"{SKIPPED_PREFIX} {host or 'the host'} is not a public domain name"
+    return None
+
+
 def check_spf(url, timeout):
     """Check the SPF record of the site's mail domain (www. stripped from the host)."""
+    skipped = dns_not_applicable(url)
+    if skipped:
+        return Finding("spf", WARN, skipped)
     domain = emailauth.mail_domain(urlsplit(url).hostname)
     txt, problem = emailauth.lookup_txt(domain, timeout)
     if problem:
@@ -105,18 +127,24 @@ def check_spf(url, timeout):
 
 def check_dmarc(url, timeout):
     """Find the DMARC record that applies to the site's mail domain and check it."""
+    skipped = dns_not_applicable(url)
+    if skipped:
+        return Finding("dmarc", WARN, skipped)
     domain = emailauth.mail_domain(urlsplit(url).hostname)
     for candidate in emailauth.dmarc_candidates(domain):
         txt, problem = emailauth.lookup_txt(f"_dmarc.{candidate}", timeout)
         if problem:
             return Finding("dmarc", WARN, problem)
         if emailauth.dmarc_records(txt):
-            return emailauth.check_dmarc(candidate, txt)
+            return emailauth.check_dmarc(candidate, txt, domain=domain)
     return emailauth.check_dmarc(None, [])
 
 
 def check_dkim(url, timeout, selectors=None):
     """Look for DKIM keys under the given selectors, or under common ones when none are given."""
+    skipped = dns_not_applicable(url)
+    if skipped:
+        return Finding("dkim", WARN, skipped)
     domain = emailauth.mail_domain(urlsplit(url).hostname)
     explicit = bool(selectors)
     keys = {}
@@ -130,7 +158,10 @@ def check_dkim(url, timeout, selectors=None):
 
 def check_caa(url, timeout):
     """Check which CAs may issue for the host that served the final URL."""
-    found_on, records, problem = caa.lookup_caa(urlsplit(url).hostname.rstrip("."), timeout)
+    skipped = dns_not_applicable(url)
+    if skipped:
+        return Finding("caa", WARN, skipped)
+    found_on, records, problem = caa.lookup_caa((urlsplit(url).hostname or "").rstrip("."), timeout)
     if problem:
         return Finding("caa", WARN, problem)
     return caa.check_caa(found_on, records)

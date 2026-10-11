@@ -77,7 +77,7 @@ class DmarcFallbackTest(unittest.TestCase):
         with mock.patch.object(emailauth, "lookup_txt", side_effect=fake_lookup):
             finding = runner.check_dmarc("https://mail.google.com/", 5)
         self.assertEqual(finding.status, "PASS")
-        self.assertIn("_dmarc.google.com", finding.detail)
+        self.assertIn("_dmarc.google.com (p=reject applies to mail.google.com)", finding.detail)
 
 
 class DkimSelectorTest(unittest.TestCase):

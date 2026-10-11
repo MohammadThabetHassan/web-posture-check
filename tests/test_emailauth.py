@@ -153,5 +153,33 @@ class DkimTest(unittest.TestCase):
         self.assertEqual(emailauth.check_dkim("example.com", {"mysel": "MIIB"}, explicit=True).status, PASS)
 
 
+
+class DmarcSubdomainPolicyTest(unittest.TestCase):
+    """RFC 7489 section 6.3: a subdomain inherits sp= from its organizational domain, else p=."""
+
+    def test_sp_applies_to_a_subdomain(self):
+        f = emailauth.check_dmarc("example.com", ["v=DMARC1; p=reject; sp=none"], domain="shop.example.com")
+        self.assertEqual(f.status, WARN)
+        self.assertIn("sp=none (the policy shop.example.com inherits as a subdomain)", f.detail)
+
+    def test_strict_sp_passes_a_subdomain_even_with_a_lax_p(self):
+        f = emailauth.check_dmarc("example.com", ["v=DMARC1; p=none; sp=reject"], domain="shop.example.com")
+        self.assertEqual(f.status, PASS)
+        self.assertIn("sp=reject applies to shop.example.com", f.detail)
+
+    def test_p_applies_to_a_subdomain_without_sp(self):
+        f = emailauth.check_dmarc("example.com", ["v=DMARC1; p=quarantine"], domain="shop.example.com")
+        self.assertEqual(f.status, PASS)
+        self.assertIn("p=quarantine applies to shop.example.com", f.detail)
+
+    def test_the_domain_itself_uses_p(self):
+        f = emailauth.check_dmarc("example.com", ["v=DMARC1; p=reject; sp=none"], domain="example.com")
+        self.assertEqual(f.status, PASS)
+
+    def test_invalid_sp_is_treated_as_p_none(self):
+        f = emailauth.check_dmarc("example.com", ["v=DMARC1; p=reject; sp=strict"], domain="shop.example.com")
+        self.assertEqual(f.status, WARN)
+        self.assertIn("not a valid policy", f.detail)
+
 if __name__ == "__main__":
     unittest.main()

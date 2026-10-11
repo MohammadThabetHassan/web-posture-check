@@ -87,8 +87,13 @@ def parse_dmarc_tags(record):
     return tags
 
 
-def check_dmarc(found_on, txt_strings):
-    """found_on is the domain whose _dmarc record was read, or None if no domain had one."""
+def check_dmarc(found_on, txt_strings, domain=None):
+    """found_on is the domain whose _dmarc record was read, or None if no domain had one.
+
+    domain is the mail domain being checked. When the record was found on a
+    parent of it (an organizational domain), the subdomain policy sp= applies,
+    falling back to p= when sp= is absent (RFC 7489 section 6.3).
+    """
     if found_on is None:
         return Finding("dmarc", WARN, "no DMARC record, so receivers get no instruction for mail that fails SPF and DKIM")
     records = dmarc_records(txt_strings)
@@ -97,18 +102,24 @@ def check_dmarc(found_on, txt_strings):
         return Finding("dmarc", FAIL, f"_dmarc.{found_on} has {len(records)} DMARC records, so receivers apply no DMARC policy")
     record = records[0]
     tags = parse_dmarc_tags(record)
-    policy = tags.get("p", "").lower()
+    inherited = domain is not None and domain != found_on
+    tag = "sp" if inherited and "sp" in tags else "p"
+    applies = f" (the policy {domain} inherits as a subdomain)" if inherited else ""
+    policy = tags.get(tag, "").lower()
     problems = []
-    if policy not in ("none", "quarantine", "reject"):
+    if tag == "sp" and policy not in ("none", "quarantine", "reject"):
+        # Section 6.6.3: a record whose sp= is invalid is handled as if it said p=none.
+        problems.append(f"sp={tags.get('sp', '')!r} is not a valid policy, so receivers treat the record as p=none")
+    elif policy not in ("none", "quarantine", "reject"):
         problems.append(f"no valid p= tag ('{tags.get('p', '')}'), so receivers treat it as p=none")
     elif policy == "none":
-        problems.append("p=none only monitors; spoofed mail is still delivered")
+        problems.append(f"{tag}=none{applies} only monitors; spoofed mail is still delivered")
     pct = tags.get("pct")
     if pct is not None and pct != "100":
         problems.append(f"pct={pct} applies the policy to only part of the failing mail")
     if problems:
         return Finding("dmarc", WARN, f"_dmarc.{found_on}: " + "; ".join(problems) + f": {record}")
-    return Finding("dmarc", PASS, f"_dmarc.{found_on}: {record}")
+    return Finding("dmarc", PASS, f"_dmarc.{found_on}{f' ({tag}={policy} applies to {domain})' if inherited else ''}: {record}")
 
 
 # Selectors used by common mail providers: Google Workspace, Microsoft 365
