@@ -711,6 +711,46 @@ class ActionOutputsTest(unittest.TestCase):
         self.assertEqual(max(g for g, _ in found), "F")
 
 
+class DeadlineTest(unittest.TestCase):
+    """--deadline bounds the whole run; a scan still running then is an error. No network needed."""
+
+    def _scan(self, release):
+        def scan(target, options):
+            if target == "slow.example":
+                release.wait(30)
+            return {"url": f"https://{target}", "status": 200, "findings": [Finding("hsts", "PASS", "ok")], "note": None}, 0
+        return scan
+
+    def test_a_target_still_running_at_the_deadline_is_an_error_and_the_run_leaves(self):
+        release = threading.Event()
+        self.addCleanup(release.set)
+        out = io.StringIO()
+        begin = time.monotonic()
+        with mock.patch.object(runner, "scan", side_effect=self._scan(release)), \
+                mock.patch.object(cli, "exit_now", side_effect=SystemExit) as exit_now, \
+                redirect_stdout(out), mock.patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit):
+            cli.main(["fast.example", "slow.example", "--deadline", "0.5", "--json"])
+        self.assertLess(time.monotonic() - begin, 10)  # the slow scan would hold it for 30 s
+        exit_now.assert_called_once_with(2)
+        results = json.loads(out.getvalue())["results"]
+        self.assertEqual([r["url"] for r in results], ["https://fast.example", "https://slow.example"])
+        self.assertNotIn("error", results[0])
+        self.assertEqual(results[1]["error"], "https://slow.example was still being scanned at the --deadline of 0.5s")
+
+    def test_a_run_that_finishes_in_time_returns_normally(self):
+        out = io.StringIO()
+        with mock.patch.object(runner, "scan", side_effect=self._scan(threading.Event())), \
+                mock.patch.object(cli, "exit_now") as exit_now, redirect_stdout(out):
+            code = cli.main(["fast.example", "--deadline", "30", "--json"])
+        self.assertEqual(code, 0)
+        exit_now.assert_not_called()
+
+    def test_the_deadline_must_be_a_positive_number_of_seconds(self):
+        for value in ("0", "-1", "nan", "soon"):
+            with self.assertRaises(SystemExit, msg=value), mock.patch("sys.stderr", io.StringIO()):
+                cli.main(["example.com", "--deadline", value])
+
+
 class TargetValidationTest(unittest.TestCase):
     def test_accepted_targets(self):
         cases = {

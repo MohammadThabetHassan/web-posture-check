@@ -10,8 +10,10 @@ import argparse
 import math
 import os
 import sys
+import time
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from typing import NoReturn
 
 from . import __version__, checks, output, runner, sarif
@@ -86,6 +88,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--list-checks", action="store_true", help="print every check name with a short description and exit")
     parser.add_argument("--timeout", type=positive_seconds, default=10.0, metavar="SECONDS",
                         help="request timeout in seconds, above 0 (default 10)")
+    parser.add_argument("--deadline", type=positive_seconds, metavar="SECONDS",
+                        help="stop waiting after SECONDS for the whole run: targets still being scanned are reported "
+                             "as errors (exit 2) and the reports are written (default: no deadline)")
     parser.add_argument("--insecure", action="store_true",
                         help="if a target's certificate is not trusted, still run the other checks without verification "
                              "(the certificate is reported as FAIL)")
@@ -199,18 +204,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not targets:
         parser.error("give at least one target, or --targets-file")
 
-    # map() returns the outcomes in input order, however the scans finish.
     options = scan_options(args)
     pool = ThreadPoolExecutor(max_workers=min(args.jobs, len(targets)))
+    # Outcomes are collected in input order, however the scans finish.
+    futures = [pool.submit(scan_safely, target, options) for target in targets]
+    deadline = time.monotonic() + args.deadline if args.deadline is not None else None
+    outcomes: list[runner.Outcome] = []
+    late = False
     try:
-        outcomes = list(pool.map(lambda target: scan_safely(target, options), targets))
+        for target, future in zip(targets, futures):
+            try:
+                outcomes.append(future.result(timeout=None if deadline is None else max(0.0, deadline - time.monotonic())))
+            except FutureTimeout:
+                late = True
+                url = display_url(target)
+                outcomes.append((runner.failed(url, f"{url} was still being scanned at the --deadline of {args.deadline:g}s"), 2))
     except KeyboardInterrupt:
         # Running scans cannot be stopped, and waiting for them could take
         # minutes, so leave at once with the conventional code for Ctrl-C.
         pool.shutdown(wait=False, cancel_futures=True)
         print("interrupted", file=sys.stderr)
         exit_now(130)
-    pool.shutdown()
+    pool.shutdown(wait=not late, cancel_futures=late)
     # Every target has a result, in input order; one that could not be scanned carries its error.
     results: list[ScanResult] = [result for result, _ in outcomes]
     errors = [result["error"] for result in results if "error" in result]
@@ -223,7 +238,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         written = write_file(args.sarif, output.to_sarif(results, errors, args.sarif_location), "--sarif") and written
     # The worst outcome wins: 2 (a target could not be scanned, or a report could
     # not be written) over 1 (a FAIL) over 0.
-    return max(code for _, code in outcomes) if written else 2
+    code = max(code for _, code in outcomes) if written else 2
+    if late:
+        # Scans still running at the deadline cannot be stopped; leave without waiting for them.
+        exit_now(code)
+    return code
 
 
 if __name__ == "__main__":
