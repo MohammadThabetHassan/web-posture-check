@@ -242,6 +242,38 @@ class MultipleTargetsTest(unittest.TestCase):
         self.assertEqual([r["url"] for r in json.loads(out)["results"]],
                          ["https://good.example/", "https://bad.example/", "https://good.example/"])
 
+    def test_json_keeps_every_target_in_input_order_with_its_error(self):
+        code, out = self._run("good.example", "down.example", "exa mple.com", "bad.example", "--json")
+        results = json.loads(out)["results"]
+        self.assertEqual([r["url"] for r in results],
+                         ["https://good.example/", "https://down.example", "exa mple.com", "https://bad.example/"])
+        self.assertEqual([r.get("error", "")[:18] for r in results], ["", "could not fetch ht", "invalid target 'ex", ""])
+        for unscanned in results[1:3]:
+            self.assertEqual((unscanned["status"], unscanned["findings"]), (None, []))
+            self.assertNotIn("score", unscanned)
+        self.assertEqual(code, 2)
+
+    def test_a_single_unreachable_target_is_still_a_json_document(self):
+        code, out = self._run("down.example", "--json")
+        self.assertEqual(json.loads(out), {"url": "https://down.example", "status": None, "findings": [],
+                                           "error": "could not fetch https://down.example: Name or service not known"})
+        self.assertEqual(code, 2)
+
+    def test_markdown_says_why_a_target_was_not_scanned(self):
+        code, out = self._run("good.example", "down.example", "--format", "markdown")
+        self.assertIn("## Web posture report: `https://down.example`\n", out)
+        self.assertTrue(out.endswith("\n**Error:** `could not fetch https://down.example: Name or service not known`\n"), out)
+        # Only the scanned target has a grade and a table.
+        self.assertEqual(out.count("**Grade "), 1)
+        self.assertEqual(out.count("| Status | Check | Detail |"), 1)
+        self.assertEqual(code, 2)
+
+    def test_text_report_leaves_unscanned_targets_to_stderr(self):
+        self.assertEqual(self._run("down.example"), (2, ""))
+        _, out = self._run("down.example", "good.example")
+        self.assertNotIn("down.example", out)
+        self.assertIn("Target: https://good.example/", out)
+
     def test_no_targets_is_a_usage_error(self):
         with mock.patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit) as ctx:
             cli.main([])

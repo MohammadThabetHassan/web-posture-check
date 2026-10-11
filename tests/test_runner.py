@@ -1,9 +1,12 @@
 """The runner's check wrappers and lookups when something goes wrong. No network needed."""
 
+import io
+import json
 import socket
 import ssl
 import unittest
 import urllib.error
+from contextlib import redirect_stdout
 from datetime import datetime, timedelta, timezone
 from unittest import mock
 
@@ -79,10 +82,22 @@ class InsecureFetchFailureTest(unittest.TestCase):
         args = cli.build_parser().parse_args(["bad-cert.example", "--insecure", "--retries", "0"])
         with mock.patch.object(fetch, "fetch_with_retries", side_effect=[_cert_error(), urllib.error.URLError("refused")]):
             result, code, error = runner.scan("bad-cert.example", args)
-        self.assertEqual(code, 1)
+        # Nothing could be fetched, so the target was not scanned: exit 2, as for any unreachable target.
+        self.assertEqual(code, 2)
         self.assertEqual([(f.check, f.status) for f in result["findings"]], [("tls-certificate", FAIL)])
         self.assertIn("even without certificate verification", result["note"])
         self.assertIn("bad-cert.example", error)
+
+    def test_json_keeps_the_finding_the_note_and_the_error(self):
+        out = io.StringIO()
+        with mock.patch.object(fetch, "fetch_with_retries", side_effect=[_cert_error(), urllib.error.URLError("refused")]), \
+                redirect_stdout(out), mock.patch("sys.stderr", io.StringIO()):
+            code = cli.main(["bad-cert.example", "--insecure", "--retries", "0", "--json"])
+        data = json.loads(out.getvalue())
+        self.assertEqual(code, 2)
+        self.assertEqual([(f["check"], f["status"]) for f in data["findings"]], [("tls-certificate", "FAIL")])
+        self.assertIn("even without certificate verification", data["note"])
+        self.assertEqual(data["error"], "could not fetch https://bad-cert.example: refused")
 
 
 class CookieEdgeCaseTest(unittest.TestCase):

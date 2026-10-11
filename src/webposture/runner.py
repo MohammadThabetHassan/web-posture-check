@@ -225,7 +225,9 @@ def _scan_insecure(url, args, cert_finding):
     The unverified context is created here and passed down explicitly, so it
     only ever applies to this target's requests. The certificate failure stays
     in the report, first and whatever --only or --skip say, and the run still
-    exits at least 1.
+    exits at least 1. If even the unverified request fails, the target could
+    not be scanned: that is an error, exit code 2, like any other target that
+    could not be reached.
     """
     context = fetch.unverified_context()
     try:
@@ -233,7 +235,7 @@ def _scan_insecure(url, args, cert_finding):
     except fetch.FETCH_ERRORS as err:
         result = {"url": url, "status": None, "findings": [cert_finding],
                   "note": "other checks skipped: the target could not be fetched even without certificate verification"}
-        return result, 1, fetch.describe_fetch_error(url, err, args.timeout, args.retries + 1)
+        return result, 2, fetch.describe_fetch_error(url, err, args.timeout, args.retries + 1)
     result, code = run_checks(url, fetched, args, context=context)
     # check_tls verifies on its own and would repeat the same failure.
     others = [f for f in result["findings"] if f.check != "tls-certificate"]

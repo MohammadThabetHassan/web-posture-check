@@ -7,6 +7,16 @@ from . import __version__, markdown, runner, sarif, score
 from .textsafe import printable
 
 
+def failed(url, error):
+    """The result for a target that could not be scanned: no status, no findings, and why."""
+    return {"url": url, "status": None, "findings": [], "note": None, "error": error}
+
+
+def _scanned(result):
+    """False for a target that could not be scanned at all (see failed)."""
+    return bool(result["findings"]) or not result.get("error")
+
+
 def to_json(result):
     data = {"url": result["url"], "status": result["status"], "findings": [f.to_dict() for f in result["findings"]]}
     result_score = score.compute(result["findings"])
@@ -14,6 +24,8 @@ def to_json(result):
         data["score"], data["grade"] = result_score
     if result["note"]:
         data["note"] = result["note"]
+    if result.get("error"):
+        data["error"] = result["error"]
     return data
 
 
@@ -43,11 +55,14 @@ def render(output_format, results, single, errors=(), sarif_anchor=None):
     if output_format == "sarif":
         return to_sarif(results, errors, sarif_anchor)
     if output_format == "json":
+        # Always one valid document: a target that could not be scanned has an "error".
         if single:
-            return json.dumps(to_json(results[0]), indent=2) + "\n" if results else ""
+            return json.dumps(to_json(results[0]), indent=2) + "\n"
         return json.dumps({"results": [to_json(r) for r in results]}, indent=2) + "\n"
     if output_format == "markdown":
         now = datetime.now(timezone.utc)
         return "\n".join(markdown.render(r["url"], r["status"], r["findings"], __version__, now, note=r["note"],
-                                          score=score.compute(r["findings"])) for r in results)
-    return "\n\n".join(to_text(r) for r in results) + "\n" if results else ""
+                                          score=score.compute(r["findings"]), error=r.get("error")) for r in results)
+    # The text report leaves out targets that could not be scanned: their error is on stderr.
+    scanned = [r for r in results if _scanned(r)]
+    return "\n\n".join(to_text(r) for r in scanned) + "\n" if scanned else ""

@@ -40,7 +40,8 @@ def _code(text, in_table=True):
     return f"{fence}{text}{fence}"
 
 
-def render(url, status, findings, version, generated_at, note=None, score=None):
+def render(url, status, findings, version, generated_at, note=None, score=None, error=None):
+    """The report for one target. error, if given, says why the target could not be (fully) scanned."""
     counts = {s: sum(1 for f in findings if f.status == s) for s in (FAIL, WARN, PASS)}
     status_text = f"HTTP {status}" if status is not None else "no HTTP response"
     lines = [
@@ -48,6 +49,13 @@ def render(url, status, findings, version, generated_at, note=None, score=None):
         "",
         f"{status_text}, generated {generated_at:%Y-%m-%d %H:%M} UTC by web-posture-check {version}",
         "",
+    ]
+    if error:
+        # Error messages quote the target and the server, so they are code spans too.
+        lines += [f"**Error:** {_code(error, in_table=False)}", ""]
+        if not findings:
+            return "\n".join(lines)
+    lines += [
         (f"**Grade {score[1]}** ({score[0]}/100): " if score else "")
         + f"**{counts[FAIL]} FAIL**, **{counts[WARN]} WARN**, {counts[PASS]} PASS",
         "",

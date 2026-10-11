@@ -122,6 +122,14 @@ def scan_safely(target, args):
         return None, 2, f"unexpected error while scanning {target!r}: {type(err).__name__}: {err} (please report it at {ISSUES_URL})"
 
 
+def display_url(target):
+    """The URL a target was scanned as, or the target itself when it is not a valid one."""
+    try:
+        return runner.normalise_target(target)
+    except ValueError:
+        return target.strip()
+
+
 def write_stdout(text):
     """Print the report; if the reader has gone (e.g. piped into head), stop quietly instead of a traceback."""
     try:
@@ -170,14 +178,15 @@ def main(argv=None):
         print("interrupted", file=sys.stderr)
         exit_now(130)
     pool.shutdown()
+    # Every target gets an entry, in input order; one that could not be scanned carries its error.
     results, codes, errors = [], [], []
-    for result, code, error in outcomes:
+    for target, (result, code, error) in zip(targets, outcomes):
         codes.append(code)
         if error:
             errors.append(error)
             print(f"error: {printable(error)}", file=sys.stderr)
-        if result is not None:
-            results.append(result)
+            result = output.failed(display_url(target), error) if result is None else {**result, "error": error}
+        results.append(result)
     text = output.render(args.format, results, single=len(targets) == 1, errors=errors, sarif_anchor=args.sarif_location)
     if args.sarif and not write_file(args.sarif, output.to_sarif(results, errors, args.sarif_location), "--sarif"):
         return 2
