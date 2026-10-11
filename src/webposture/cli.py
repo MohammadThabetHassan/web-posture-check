@@ -10,6 +10,7 @@ import argparse
 import math
 import os
 import sys
+import threading
 import time
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -49,6 +50,9 @@ def positive_seconds(value: str) -> float:
         raise argparse.ArgumentTypeError(f"{value!r} is not a number of seconds") from None
     if not math.isfinite(seconds) or seconds <= 0:
         raise argparse.ArgumentTypeError(f"{value!r} must be a number of seconds greater than 0")
+    # Beyond this, waiting and socket timeouts overflow (about 49 days on Windows).
+    if seconds > threading.TIMEOUT_MAX:
+        raise argparse.ArgumentTypeError(f"{value!r} is too large; the most is {threading.TIMEOUT_MAX:g} seconds")
     return seconds
 
 
@@ -218,7 +222,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             except FutureTimeout:
                 late = True
                 url = display_url(target)
-                outcomes.append((runner.failed(url, f"{url} was still being scanned at the --deadline of {args.deadline:g}s"), 2))
+                outcomes.append((runner.failed(url, f"{url} was not scanned before the --deadline of {args.deadline:g}s"), 2))
     except KeyboardInterrupt:
         # Running scans cannot be stopped, and waiting for them could take
         # minutes, so leave at once with the conventional code for Ctrl-C.

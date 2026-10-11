@@ -735,7 +735,7 @@ class DeadlineTest(unittest.TestCase):
         results = json.loads(out.getvalue())["results"]
         self.assertEqual([r["url"] for r in results], ["https://fast.example", "https://slow.example"])
         self.assertNotIn("error", results[0])
-        self.assertEqual(results[1]["error"], "https://slow.example was still being scanned at the --deadline of 0.5s")
+        self.assertEqual(results[1]["error"], "https://slow.example was not scanned before the --deadline of 0.5s")
 
     def test_a_run_that_finishes_in_time_returns_normally(self):
         out = io.StringIO()
@@ -745,10 +745,20 @@ class DeadlineTest(unittest.TestCase):
         self.assertEqual(code, 0)
         exit_now.assert_not_called()
 
-    def test_the_deadline_must_be_a_positive_number_of_seconds(self):
-        for value in ("0", "-1", "nan", "soon"):
-            with self.assertRaises(SystemExit, msg=value), mock.patch("sys.stderr", io.StringIO()):
+    def test_the_deadline_must_be_a_positive_number_of_seconds_that_can_be_waited(self):
+        # The scan and exit are mocked, so a regression that let a value through could not
+        # reach the network or end the test run.
+        for value in ("0", "-1", "nan", "soon", "1e10"):
+            err = io.StringIO()
+            with mock.patch.object(runner, "scan") as scan, mock.patch.object(cli, "exit_now"), \
+                    mock.patch("sys.stderr", err), self.assertRaises(SystemExit, msg=value):
                 cli.main(["example.com", "--deadline", value])
+            scan.assert_not_called()
+            self.assertIn("argument --deadline", err.getvalue(), value)
+        err = io.StringIO()
+        with mock.patch("sys.stderr", err), self.assertRaises(SystemExit):
+            cli.main(["example.com", "--timeout", "1e10"])
+        self.assertIn("is too large", err.getvalue())
 
 
 class TargetValidationTest(unittest.TestCase):
