@@ -40,6 +40,7 @@ _RESERVED_NAMES = frozenset({"localhost", "test", "invalid", "example", "local",
 # What a scheme matches (CSP3 section 6.7.2.8): http: also matches https, and ws:
 # and wss: match http(s) URLs too, which WebKit (Safari) applies to scripts.
 _SCHEME_REACH = {"http": {"http", "https"}, "https": {"https"}, "ws": {"http", "https"}, "wss": {"https"}}
+_WEBSOCKET = ("ws:", "wss:", "ws://", "wss://")
 
 # For each part of script loading, the directives that govern it, most specific
 # first: the first one a policy has is the one that applies (CSP3 section 6.8.4,
@@ -218,7 +219,10 @@ def _reach(sources: list[str]) -> set[str]:
             if not match:
                 continue
             suffix = match["suffix"]
-            if suffix is not None and (suffix in _RESERVED_NAMES or not publicsuffix.is_public_suffix(suffix)):
+            # *.X matches hosts others can register when X is a public suffix (*.co.uk) or
+            # one lies just below it (*.amazonaws.com covers anyone's bucket.s3.amazonaws.com).
+            if suffix is not None and (suffix in _RESERVED_NAMES or not (
+                    publicsuffix.is_public_suffix(suffix) or publicsuffix.has_suffix_below(suffix))):
                 continue
             reach |= {"http", "https"} if match["scheme"] is None else _SCHEME_REACH.get(match["scheme"], set())
     return reach
@@ -227,6 +231,15 @@ def _reach(sources: list[str]) -> set[str]:
 def _script_reach(sources: list[str]) -> set[str]:
     """_reach for scripts: with 'strict-dynamic', browsers ignore host and scheme sources."""
     return set() if "'strict-dynamic'" in sources else _reach(sources)
+
+
+def _trusts_any_url(sources: list[str]) -> bool:
+    """A valid nonce, or 'strict-dynamic' with a nonce or hash: some script runs whatever its URL.
+
+    'strict-dynamic' alone lets no script run at all.
+    """
+    nonce = any(source.startswith("'nonce-") and _NONCE_OR_HASH.fullmatch(source) for source in sources)
+    return nonce or ("'strict-dynamic'" in sources and any(_NONCE_OR_HASH.fullmatch(source) for source in sources))
 
 
 def _allows_inline(sources: list[str]) -> bool:
@@ -291,15 +304,18 @@ def _script_problems(policies: list[dict[str, list[str]]]) -> list[str]:
         # The sources to remove, per policy.
         per_policy = [(name, [source for source in sources if _reach([source]) & shared]) for name, sources in elements]
         shown = ", ".join(per_policy[0][1]) if len(elements) == 1 else "; ".join(f"{name} {' '.join(tokens)}" for name, tokens in per_policy)
-        websocket = any(source.startswith(("ws:", "wss:", "ws://", "wss://")) for _, tokens in per_policy for source in tokens)
+        # Name Safari only when a ws: or wss: source is what makes some policy this broad.
+        websocket = any(not shared <= _reach([source for source in sources if not source.startswith(_WEBSOCKET)])
+                        for _, sources in elements)
         note = "; Safari lets a ws: or wss: source load scripts, as CSP3 specifies" if websocket else ""
         add(f"{_subject(elements)} scripts from {_describe_reach(shared)}{_scope(elements)} ({shown}{note})")
-    # A nonce or 'strict-dynamic' trusts a script whatever its URL, so an injected
-    # <base> tag can point the page's relative script URLs at another host. base-uri
-    # (which does not fall back to default-src) is what stops that.
-    url_blind = elements and all(
-        "'strict-dynamic'" in sources or any(source.startswith("'nonce-") and _NONCE_OR_HASH.fullmatch(source) for source in sources)
-        for _, sources in elements)
+    # A nonce (or 'strict-dynamic' with a nonce or hash) trusts a script whatever its URL,
+    # so an injected <base> tag can point the page's relative script URLs at another host.
+    # That works when every policy lets the moved script through: by its nonce, or because
+    # it allows any host. base-uri (which does not fall back to default-src) stops it.
+    trusts = [_trusts_any_url(sources) for _, sources in elements]
+    url_blind = any(trusts) and all(trust or _script_reach(sources) & {"http", "https"}
+                                    for trust, (_, sources) in zip(trusts, elements))
     restricted_base = any("base-uri" in policy and not _reach(policy["base-uri"]) & {"http", "https"} for policy in policies)
     if url_blind and not restricted_base:
         add("no base-uri restricts <base>, so injected markup can send the page's nonced relative script URLs to "
@@ -365,7 +381,7 @@ def check_framing(headers: HeaderSource) -> Finding:
             shown = " ".join(protective[0]) or "'none'"
             return Finding("clickjacking", PASS, f"CSP frame-ancestors {shown}")
         ignored = "; X-Frame-Options is ignored when frame-ancestors is set" if hm.get_all("X-Frame-Options") else ""
-        safari = any(source.startswith(("ws:", "wss:", "ws://", "wss://")) for source in ancestors[0])
+        safari = not _reach([source for source in ancestors[0] if not source.startswith(_WEBSOCKET)]) & {"http", "https"}
         note = " (in Safari, which lets a ws: or wss: source match https sites, as CSP3 specifies)" if safari else ""
         return Finding("clickjacking", FAIL, f"CSP frame-ancestors {' '.join(ancestors[0])} allows any site to frame this page{note}{ignored}")
     values = hm.split("X-Frame-Options")

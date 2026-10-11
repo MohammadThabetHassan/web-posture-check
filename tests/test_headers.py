@@ -604,6 +604,17 @@ class CspScriptModelTest(unittest.TestCase):
         for source in ("*.example.com", "https://*.example.com", "*.foo.co.uk", "blob:", "chrome-extension:", "ftp://*"):
             self.assertEqual(self._csp(f"script-src 'self' {source}").status, PASS, source)
 
+    def test_a_wildcard_just_above_a_public_suffix_is_any_host(self):
+        # Anyone can host scripts at bucket.s3.amazonaws.com, which *.amazonaws.com matches;
+        # kawasaki.jp and compute.amazonaws.com sit under wildcard rules, as browsers read them.
+        for source in ("https://*.amazonaws.com", "*.core.windows.net", "*.fastly.net", "*.compute.amazonaws.com", "*.kawasaki.jp"):
+            f = self._csp(f"script-src 'self' {source}")
+            self.assertEqual(f.status, WARN, source)
+        # salesforce.com's only rule is a staging wildcard five labels down.
+        self.assertEqual(self._csp("script-src 'self' https://*.salesforce.com").status, PASS)
+        f = headers.check_framing({"Content-Security-Policy": "frame-ancestors 'self' https://*.compute.amazonaws.com"})
+        self.assertEqual(f.status, FAIL)
+
     def test_a_wildcard_under_any_public_suffix_is_any_host(self):
         # The Public Suffix List, private section included: anyone can get a name under these.
         for source in ("*.co.uk", "https://*.github.io", "*.cloudfront.net", "https://*.com"):
@@ -618,6 +629,9 @@ class CspScriptModelTest(unittest.TestCase):
             f = self._csp(f"default-src 'self' {source}")
             self.assertEqual(f.status, WARN, source)
             self.assertIn(f"default-src allows scripts from {reach} ({source}; Safari lets a ws: or wss: source load scripts", f.detail)
+        # The Safari note is only for a source that is broad because of ws: or wss:.
+        self.assertNotIn("Safari", self._csp("script-src * wss:").detail)
+        self.assertNotIn("Safari", headers.check_framing({"Content-Security-Policy": "frame-ancestors * wss:"}).detail)
         # In connect-src it only governs connections, so the script policy is fine.
         self.assertEqual(self._csp("default-src 'self'; connect-src 'self' wss:").status, PASS)
 
@@ -678,6 +692,15 @@ class CspBaseUriTest(unittest.TestCase):
             f = self._csp(value)
             self.assertEqual(f.status, WARN, value)
             self.assertIn("no base-uri restricts <base>", f.detail, value)
+
+    def test_a_second_policy_that_allows_any_host_does_not_stop_it(self):
+        # Checked in Chromium, Firefox and WebKit: the moved nonced script passes "https:" too.
+        for second in ("script-src https:", "default-src *"):
+            f = self._csp("script-src 'nonce-abc123'", second)
+            self.assertIn("no base-uri restricts <base>", f.detail, second)
+
+    def test_strict_dynamic_without_a_nonce_or_hash_runs_no_script(self):
+        self.assertNotIn("base-uri", self._csp("script-src 'strict-dynamic'").detail)
 
     def test_base_uri_or_a_url_bound_policy_passes(self):
         for values in (("script-src 'nonce-abc123'; base-uri 'none'",), ("script-src 'nonce-abc123'; base-uri 'self'",),
