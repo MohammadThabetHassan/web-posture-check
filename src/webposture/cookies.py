@@ -34,14 +34,15 @@ class SetCookie(NamedTuple):
 
 def parse_set_cookie(value: str) -> tuple[str, dict[str, str]]:
     """Return (name, attributes) where attributes maps lower-cased names to values."""
-    parts = [p.strip() for p in value.split(";")]
-    name = parts[0].split("=", 1)[0].strip()
+    # RFC 6265 section 5.2 trims only spaces and tabs (WSP); "Secure\xa0" is not Secure.
+    parts = [p.strip(" \t") for p in value.split(";")]
+    name = parts[0].split("=", 1)[0].strip(" \t")
     attributes = {}
     for part in parts[1:]:
         if not part:
             continue
         key, _, attr_value = part.partition("=")
-        attributes[key.strip().lower()] = attr_value.strip()
+        attributes[key.strip(" \t").lower()] = attr_value.strip(" \t")
     return name, attributes
 
 

@@ -333,10 +333,41 @@ class HstsStandardTest(unittest.TestCase):
         for value in ("max-age=abc", "max-age=-5", "max-age", "max-age=1e9"):
             self.assertEqual(headers.check_hsts({"Strict-Transport-Security": value}).status, FAIL, value)
 
-    def test_a_repeated_directive_makes_the_header_invalid(self):
-        f = headers.check_hsts({"Strict-Transport-Security": "max-age=31536000; max-age=10"})
+    def test_a_repeated_max_age_or_include_subdomains_makes_the_header_invalid(self):
+        # Chromium and Firefox reject these headers (RFC 6797 section 6.1 allows each directive once).
+        for value, repeated in (("max-age=31536000; max-age=10", "max-age"),
+                                ("max-age=31536000; includeSubDomains; INCLUDESUBDOMAINS", "INCLUDESUBDOMAINS")):
+            f = headers.check_hsts({"Strict-Transport-Security": value})
+            self.assertEqual(f.status, FAIL, value)
+            self.assertIn(f"not valid (it repeats {repeated}), so browsers ignore it", f.detail)
+
+    def test_unknown_directives_are_ignored_even_when_repeated(self):
+        # Browsers skip directives they do not know; preload is one of them.
+        f = headers.check_hsts({"Strict-Transport-Security": "max-age=31536000; includeSubdomains; preload; preload; x=1"})
+        self.assertEqual((f.status, f.detail), (PASS, "max-age=31536000; includeSubDomains; preload"))
+
+    def test_include_subdomains_takes_no_value(self):
+        f = headers.check_hsts({"Strict-Transport-Security": "max-age=31536000; includeSubDomains=true"})
         self.assertEqual(f.status, FAIL)
-        self.assertIn("repeats a directive", f.detail)
+        self.assertIn("includeSubDomains takes no value", f.detail)
+
+    def test_directive_names_and_values_must_follow_the_grammar(self):
+        for value in ("max-age=31536000; include Sub Domains", 'max-age=31536000; x="unterminated',
+                      "max-age=31536000; x=", "max-age=31536000; x=a b", "max-age=31536000; (x)"):
+            f = headers.check_hsts({"Strict-Transport-Security": value})
+            self.assertEqual(f.status, FAIL, value)
+            self.assertIn("is not valid", f.detail, value)
+        # A quoted value may contain ";" (the grammar's quoted-string).
+        for value in ('max-age=31536000; x="a; b"', 'max-age="31536000"; x="a \\" b"'):
+            self.assertEqual(headers.check_hsts({"Strict-Transport-Security": value}).status, PASS, value)
+
+    def test_untrusted_certificate_is_named_in_a_pass(self):
+        # RFC 6797 section 8.1: browsers ignore the header on a connection whose certificate is not trusted.
+        f = headers.check_hsts({"Strict-Transport-Security": "max-age=31536000"}, verified=False)
+        self.assertEqual(f.status, PASS)
+        self.assertIn("browsers ignore it while the certificate is not trusted", f.detail)
+        missing = headers.check_hsts({}, verified=False)
+        self.assertNotIn("certificate", missing.detail)
 
     def test_a_directive_name_is_not_matched_inside_another(self):
         # The old regex found "max-age=" inside "xmax-age=", which is an unknown directive.
@@ -388,6 +419,35 @@ class CspStandardTest(unittest.TestCase):
         # CSP3 section 6.7.3.3: 'strict-dynamic' disables 'unsafe-inline' for scripts, like a nonce or hash.
         f = headers.check_csp({"Content-Security-Policy": "script-src 'strict-dynamic' 'unsafe-inline'"})
         self.assertEqual(f.status, PASS)
+
+
+class HttpWhitespaceTest(unittest.TestCase):
+    """Fetch strips only tab, space, CR and LF from header values; other characters stay part of the value."""
+
+    def test_a_no_break_space_is_part_of_the_value(self):
+        self.assertEqual(headers.check_content_type_options({"X-Content-Type-Options": "nosniff\xa0"}).status, FAIL)
+        self.assertEqual(headers.check_content_type_options({"X-Content-Type-Options": " nosniff\t"}).status, PASS)
+        self.assertEqual(headers.check_framing({"X-Frame-Options": "DENY\x85"}).status, FAIL)
+        self.assertEqual(headers.check_hsts({"Strict-Transport-Security": "max-age=31536000\x1f"}).status, FAIL)
+
+    def test_repeated_cross_origin_policies_are_not_recognised(self):
+        # Browsers combine them into "same-origin, same-origin", which no browser accepts.
+        f = headers.check_cross_origin_isolation(HeaderMap([
+            ("Cross-Origin-Opener-Policy", "same-origin"), ("Cross-Origin-Opener-Policy", "same-origin"),
+            ("Cross-Origin-Resource-Policy", "same-origin"), ("Cross-Origin-Resource-Policy", "same-origin")]))
+        self.assertEqual(f.status, WARN)
+        self.assertIn("Cross-Origin-Resource-Policy value 'same-origin, same-origin' is not recognised", f.detail)
+        self.assertIn("COOP=unset, CORP=unset", f.detail)
+
+    def test_an_empty_cross_origin_policy_is_unset(self):
+        f = headers.check_cross_origin_isolation({"Cross-Origin-Opener-Policy": "", "Cross-Origin-Resource-Policy": "same-site"})
+        self.assertIn("COOP=unset, CORP=same-site", f.detail)
+        self.assertNotIn("not recognised", f.detail)
+
+    def test_repeated_x_xss_protection_is_not_valid(self):
+        f = headers.check_x_xss_protection(HeaderMap([("X-XSS-Protection", "0"), ("X-XSS-Protection", "0")]))
+        self.assertEqual(f.status, WARN)
+        self.assertIn("'0, 0' is not a valid value", f.detail)
 
 
 class CspScriptModelTest(unittest.TestCase):

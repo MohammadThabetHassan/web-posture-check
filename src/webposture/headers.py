@@ -15,7 +15,7 @@ import re
 from collections.abc import Callable
 
 from .findings import FAIL, PASS, WARN, Finding
-from .headermap import HeaderMap, HeaderSource
+from .headermap import HTTP_WHITESPACE, HeaderMap, HeaderSource, split_list
 
 # Six months: the common scanner baseline. The HSTS preload list requires one year.
 HSTS_MIN_MAX_AGE = 15552000
@@ -53,44 +53,66 @@ def _headers(headers: HeaderSource) -> HeaderMap:
 # --- Strict-Transport-Security ------------------------------------------------------------------
 
 
-def _hsts_directives(value: str) -> dict[str, str | None] | None:
+# RFC 9110 token, and quoted-string with its escapes.
+_TOKEN = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
+_QUOTED_STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
+
+
+def _hsts_directives(value: str) -> dict[str, str | None] | str:
     """Directive name (lower case) -> value with quotes removed, or None for a bare directive.
 
-    Returns None for the whole header when a directive appears twice: RFC 6797
-    section 6.1 allows each directive once, and browsers ignore such a header.
+    Returns why browsers ignore the whole header instead, as Chromium and
+    Firefox do: a name or value that does not follow the grammar, a repeated
+    max-age or includeSubDomains, or an includeSubDomains with a value (RFC
+    6797 section 6.1). Other directives, preload among them, are ignored.
     """
     directives: dict[str, str | None] = {}
-    for part in value.split(";"):
-        name, sep, raw = part.partition("=")
-        name = name.strip().lower()
-        if not name:
+    for part in split_list(value, ";"):
+        if not part:
             continue
-        if name in directives:
-            return None
-        text = raw.strip()
-        if len(text) >= 2 and text[0] == text[-1] == '"':
-            text = text[1:-1]
-        directives[name] = text if sep else None
+        name, sep, raw = part.partition("=")
+        name, raw = name.strip(" \t"), raw.strip(" \t")
+        if not _TOKEN.fullmatch(name):
+            return f"'{name}' is not a valid directive"
+        if sep and _QUOTED_STRING.fullmatch(raw):
+            raw = re.sub(r"\\(.)", r"\1", raw[1:-1])
+        elif sep and not _TOKEN.fullmatch(raw):
+            return f"the value of {name} is not valid"
+        lower = name.lower()
+        if lower in ("max-age", "includesubdomains") and lower in directives:
+            return f"it repeats {name}"
+        if lower == "includesubdomains" and sep:
+            return "includeSubDomains takes no value"
+        directives[lower] = raw if sep else None
     return directives
 
 
-def check_hsts(headers: HeaderSource, https: bool = True) -> Finding:
+def check_hsts(headers: HeaderSource, https: bool = True, verified: bool = True) -> Finding:
     """Strict-Transport-Security, read as browsers read it (RFC 6797).
 
-    https is False when the final response came over plain HTTP, where browsers
-    ignore the header entirely (section 8.1).
+    https is False when the final response came over plain HTTP, and verified is
+    False when its certificate is not trusted (a scan with --insecure). Browsers
+    ignore the header in both cases (section 8.1): over plain HTTP that is a
+    FAIL; with --insecure the header is judged as configured, with a note.
     """
+    finding = _check_hsts(headers, https)
+    if not verified and finding.status != FAIL:
+        return Finding("hsts", finding.status, finding.detail + "; browsers ignore it while the certificate is not trusted (RFC 6797 section 8.1)")
+    return finding
+
+
+def _check_hsts(headers: HeaderSource, https: bool) -> Finding:
     values = _headers(headers).get_all("Strict-Transport-Security")
     if not values:
         return Finding("hsts", FAIL, "Strict-Transport-Security header is missing")
     if not https:
         return Finding("hsts", FAIL, "the final response is plain HTTP, where browsers ignore Strict-Transport-Security (RFC 6797 section 8.1)")
     # Section 8.1: with several Strict-Transport-Security headers, only the first is processed.
-    value = values[0].strip()
+    value = values[0].strip(HTTP_WHITESPACE)
     extra = f" (first of {len(values)} Strict-Transport-Security headers; browsers use only the first)" if len(values) > 1 else ""
     directives = _hsts_directives(value)
-    if directives is None:
-        return Finding("hsts", FAIL, f"Strict-Transport-Security repeats a directive, so browsers ignore it: '{value}'{extra}")
+    if isinstance(directives, str):
+        return Finding("hsts", FAIL, f"Strict-Transport-Security is not valid ({directives}), so browsers ignore it: '{value}'{extra}")
     raw_max_age = directives.get("max-age")
     if raw_max_age is None or not re.fullmatch(r"[0-9]+", raw_max_age):
         return Finding("hsts", FAIL, f"Strict-Transport-Security has no valid max-age{extra}")
@@ -359,10 +381,11 @@ def check_x_xss_protection(headers: HeaderSource) -> Finding:
     could be abused to detect or block content on the page (XS-Leaks), so OWASP
     recommends '0' or omitting the header and relying on Content-Security-Policy.
     """
-    value = _headers(headers).get("X-XSS-Protection")
+    # Repeated headers are combined, so "0, 0" is not a valid value.
+    value = _headers(headers).combined("X-XSS-Protection")
     if value is None:
         return Finding("x-xss-protection", PASS, "not set (rely on Content-Security-Policy)")
-    token = value.split(";", 1)[0].strip()
+    token = value.split(";", 1)[0].strip(HTTP_WHITESPACE)
     if token == "0":
         return Finding("x-xss-protection", PASS, "0 (legacy XSS auditor disabled)")
     if token == "1":
@@ -371,8 +394,8 @@ def check_x_xss_protection(headers: HeaderSource) -> Finding:
 
 
 def _policy_token(value: str | None) -> str | None:
-    """First token of a policy header, e.g. 'same-origin; report-to="x"' -> 'same-origin'."""
-    return value.split(";", 1)[0].strip().lower() if value else None
+    """First token of a policy header, e.g. 'same-origin; report-to="x"' -> 'same-origin'; None when empty."""
+    return value.split(";", 1)[0].strip(HTTP_WHITESPACE).lower() or None if value else None
 
 
 # Values browsers understand. Anything else is ignored, which means no protection.
@@ -382,11 +405,16 @@ COEP_VALUES = ("unsafe-none", "require-corp", "credentialless")
 
 
 def _known_policy(hm: HeaderMap, name: str, allowed: tuple[str, ...]) -> tuple[str | None, str | None]:
-    """Return (value, None) for a recognised value or None, or (None, raw) for an unknown one."""
-    value = _policy_token(hm.get(name))
+    """Return (value, None) for a recognised value or None, or (None, raw) for one browsers ignore.
+
+    Browsers combine a repeated header, so two copies ("same-origin, same-origin")
+    are not a value they recognise either (the Fetch standard notes this for CORP).
+    """
+    combined = hm.combined(name)
+    value = _policy_token(combined)
     if value is None or value in allowed:
         return value, None
-    return None, value
+    return None, combined
 
 
 def check_cross_origin_isolation(headers: HeaderSource) -> Finding:
@@ -447,7 +475,11 @@ ALL_CHECKS: list[Callable[[HeaderSource], Finding]] = [
 ]
 
 
-def run(headers: HeaderSource, https: bool = True) -> list[Finding]:
-    """Every header check on one response. https says whether that response came over HTTPS."""
+def run(headers: HeaderSource, https: bool = True, verified: bool = True) -> list[Finding]:
+    """Every header check on one response.
+
+    https says whether that response came over HTTPS, and verified whether its
+    certificate was verified (False with --insecure).
+    """
     hm = _headers(headers)
-    return [check_hsts(hm, https=https) if check is check_hsts else check(hm) for check in ALL_CHECKS]
+    return [check_hsts(hm, https=https, verified=verified) if check is check_hsts else check(hm) for check in ALL_CHECKS]

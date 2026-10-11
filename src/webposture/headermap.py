@@ -15,16 +15,20 @@ from collections.abc import Iterable, Mapping
 from email.message import Message
 from typing import Union
 
+# Fetch's HTTP whitespace: tab, space, CR and LF. str.strip() would also remove
+# characters such as U+00A0, which browsers keep, so "nosniff\xa0" is not "nosniff".
+HTTP_WHITESPACE = " \t\r\n"
+
 # Anything a check accepts as response headers: a HeaderMap, the http.client
 # message urllib returns, a plain mapping (handy in tests), or (name, value) pairs.
 HeaderSource = Union["HeaderMap", Message, Mapping[str, str], Iterable[tuple[str, str]]]
 
 
-def split_list(value: str) -> list[str]:
-    """Split a header value on commas that are not inside a quoted string, trimming spaces and tabs.
+def split_list(value: str, separator: str = ",") -> list[str]:
+    """Split a header value on commas (or separator) that are not inside a quoted string, trimming spaces and tabs.
 
-    This is the splitting half of the Fetch standard's "get, decode, and split".
-    Quoted strings keep their quotes, as in the standard.
+    With commas this is the splitting half of the Fetch standard's "get, decode,
+    and split". Quoted strings keep their quotes, as in the standard.
     """
     values: list[str] = []
     current: list[str] = []
@@ -42,7 +46,7 @@ def split_list(value: str) -> list[str]:
         elif char == '"':
             quoted = True
             current.append(char)
-        elif char == ",":
+        elif char == separator:
             values.append("".join(current).strip(" \t"))
             current = []
         else:
@@ -75,14 +79,14 @@ class HeaderMap:
         return [value for key, value in self._items if key.lower() == wanted]
 
     def get(self, name: str) -> str | None:
-        """The first value of a header with surrounding whitespace removed, or None when it is absent."""
+        """The first value of a header without surrounding HTTP whitespace, or None when it is absent."""
         values = self.get_all(name)
-        return values[0].strip() if values else None
+        return values[0].strip(HTTP_WHITESPACE) if values else None
 
     def combined(self, name: str) -> str | None:
         """Every value of a header joined with ", ", as the Fetch standard combines them; None when absent."""
         values = self.get_all(name)
-        return ", ".join(value.strip() for value in values) if values else None
+        return ", ".join(value.strip(HTTP_WHITESPACE) for value in values) if values else None
 
     def split(self, name: str) -> list[str] | None:
         """The Fetch standard's "get, decode, and split": every occurrence combined, then split on commas.

@@ -206,6 +206,13 @@ class CookieChainTest(unittest.TestCase):
         self.assertEqual(gone.status, PASS)
         self.assertIn("no cookies set", gone.detail)
 
+    def test_only_spaces_and_tabs_are_trimmed_from_attributes(self):
+        # RFC 6265 section 5.2: "Secure\xa0" is not the Secure attribute.
+        name, attributes = cookies.parse_set_cookie("sid=1;\tSecure\xa0; HttpOnly ;SameSite=Lax")
+        self.assertNotIn("secure", attributes)
+        self.assertIn("httponly", attributes)
+        self.assertEqual((name, attributes["samesite"]), ("sid", "Lax"))
+
     def test_cookie_identity(self):
         key = cookies.cookie_key
         self.assertEqual(key("a", {}, "https://Example.com/x/y/z"), ("a", "example.com", True, "/x/y"))
