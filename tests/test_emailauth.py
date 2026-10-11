@@ -157,6 +157,16 @@ class DkimTest(unittest.TestCase):
 
 
 
+class DmarcCandidatesTest(unittest.TestCase):
+    def test_the_walk_stops_at_the_organizational_domain(self):
+        self.assertEqual(emailauth.dmarc_candidates("shop.example.co.uk"), ["shop.example.co.uk", "example.co.uk"])
+        self.assertEqual(emailauth.dmarc_candidates("a.b.example.com"), ["a.b.example.com", "b.example.com", "example.com"])
+        self.assertEqual(emailauth.dmarc_candidates("example.com"), ["example.com"])
+        self.assertEqual(emailauth.dmarc_candidates("user.github.io"), ["user.github.io"])
+        # A public suffix is asked only when it is the domain itself.
+        self.assertEqual(emailauth.dmarc_candidates("co.uk"), ["co.uk"])
+
+
 class DmarcSubdomainPolicyTest(unittest.TestCase):
     """RFC 7489 section 6.3: a subdomain inherits sp= from its organizational domain, else p=."""
 

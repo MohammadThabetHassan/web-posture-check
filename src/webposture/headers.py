@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 
+from . import publicsuffix
 from .findings import FAIL, PASS, WARN, Finding
 from .headermap import HTTP_WHITESPACE, HeaderMap, HeaderSource, split_list
 
@@ -26,13 +27,19 @@ HSTS_PRELOAD_MIN_MAX_AGE = 31536000
 # unfilled template placeholder, is not a nonce, so it switches nothing off.
 _NONCE_OR_HASH = re.compile(r"'(?:nonce|sha256|sha384|sha512)-[a-z0-9+/_-]+={0,2}'")
 
-# A host-source whose host is "*", or a wildcard right under a top-level domain
-# (*.com, where anyone can register a name), with any scheme, port and path
-# (CSP3 section 2.3.1): https://*, *:443, *:*, http://*/js/, https://*.com.
-_ANY_HOST_SOURCE = re.compile(r"(?:(?P<scheme>[a-z][a-z0-9+.-]*)://)?\*(?:\.(?P<tld>[a-z0-9-]+))?(?::(?:[0-9]+|\*))?(?:/.*)?")
+# A host-source whose host is "*", or a wildcard right under a name (*.co.uk), with
+# any scheme, port and path (CSP3 section 2.3.1): https://*, *:443, *:*,
+# http://*/js/, https://*.co.uk. A wildcard right under a public suffix matches
+# hosts anyone can register.
+_ANY_HOST_SOURCE = re.compile(r"(?:(?P<scheme>[a-z][a-z0-9+.-]*)://)?\*(?:\.(?P<suffix>[a-z0-9-]+(?:\.[a-z0-9-]+)*))?(?::(?:[0-9]+|\*))?(?:/.*)?")
 
-# Special-use names that cannot be registered publicly (RFC 2606, RFC 6761, RFC 6762's .local, ICANN's .internal).
-_RESERVED_TLDS = frozenset({"localhost", "test", "invalid", "example", "local", "internal"})
+# Special-use names that cannot be registered publicly (RFC 2606, RFC 6761, RFC 6762's
+# .local, RFC 8375's home.arpa, ICANN's .internal and the never-delegated .corp and .home).
+_RESERVED_NAMES = frozenset({"localhost", "test", "invalid", "example", "local", "internal", "corp", "home", "home.arpa"})
+
+# What a scheme matches (CSP3 section 6.7.2.8): http: also matches https, and ws:
+# and wss: match http(s) URLs too, which WebKit (Safari) applies to scripts.
+_SCHEME_REACH = {"http": {"http", "https"}, "https": {"https"}, "ws": {"http", "https"}, "wss": {"https"}}
 
 # For each part of script loading, the directives that govern it, most specific
 # first: the first one a policy has is the one that applies (CSP3 section 6.8.4,
@@ -193,23 +200,27 @@ def _reach(sources: list[str]) -> set[str]:
     any web host over that scheme, "data" for data: URLs.
 
     * and http: also match https (CSP3 sections 6.7.2.6 and 6.7.2.8), so the
-    spelling does not matter: *, http:, https:, https://* and *:443 all let
-    an attacker load code from a host of their own.
+    spelling does not matter: *, http:, https:, https://*, *:443 and *.co.uk all
+    let an attacker load code from a host of their own. So do ws: and wss:, in
+    Safari: WebKit lets them match http(s) URLs, as CSP3 specifies (checked in
+    Chromium, Firefox and WebKit; only WebKit does it).
     """
     reach: set[str] = set()
     for source in sources:
-        if source in ("*", "http:"):
+        if source == "*":
             reach |= {"http", "https"}
-        elif source in ("https:", "data:"):
-            reach.add(source[:-1])
+        elif source == "data:":
+            reach.add("data")
+        elif source.endswith(":") and source[:-1] in _SCHEME_REACH:
+            reach |= _SCHEME_REACH[source[:-1]]
         else:
             match = _ANY_HOST_SOURCE.fullmatch(source)
-            if match and match["tld"] in _RESERVED_TLDS:
+            if not match:
                 continue
-            if match and match["scheme"] in (None, "http"):
-                reach |= {"http", "https"}
-            elif match and match["scheme"] == "https":
-                reach.add("https")
+            suffix = match["suffix"]
+            if suffix is not None and (suffix in _RESERVED_NAMES or not publicsuffix.is_public_suffix(suffix)):
+                continue
+            reach |= {"http", "https"} if match["scheme"] is None else _SCHEME_REACH.get(match["scheme"], set())
     return reach
 
 
@@ -280,7 +291,9 @@ def _script_problems(policies: list[dict[str, list[str]]]) -> list[str]:
         # The sources to remove, per policy.
         per_policy = [(name, [source for source in sources if _reach([source]) & shared]) for name, sources in elements]
         shown = ", ".join(per_policy[0][1]) if len(elements) == 1 else "; ".join(f"{name} {' '.join(tokens)}" for name, tokens in per_policy)
-        add(f"{_subject(elements)} scripts from {_describe_reach(shared)}{_scope(elements)} ({shown})")
+        websocket = any(source.startswith(("ws:", "wss:", "ws://", "wss://")) for _, tokens in per_policy for source in tokens)
+        note = "; Safari lets a ws: or wss: source load scripts, as CSP3 specifies" if websocket else ""
+        add(f"{_subject(elements)} scripts from {_describe_reach(shared)}{_scope(elements)} ({shown}{note})")
     if not _governing(policies, "handlers"):
         add("nothing restricts inline event handlers (no script-src-attr, script-src or default-src)")
     evaluating = _governing(policies, "eval")
@@ -342,7 +355,9 @@ def check_framing(headers: HeaderSource) -> Finding:
             shown = " ".join(protective[0]) or "'none'"
             return Finding("clickjacking", PASS, f"CSP frame-ancestors {shown}")
         ignored = "; X-Frame-Options is ignored when frame-ancestors is set" if hm.get_all("X-Frame-Options") else ""
-        return Finding("clickjacking", FAIL, f"CSP frame-ancestors {' '.join(ancestors[0])} allows any site to frame this page{ignored}")
+        safari = any(source.startswith(("ws:", "wss:", "ws://", "wss://")) for source in ancestors[0])
+        note = " (in Safari, which lets a ws: or wss: source match https sites, as CSP3 specifies)" if safari else ""
+        return Finding("clickjacking", FAIL, f"CSP frame-ancestors {' '.join(ancestors[0])} allows any site to frame this page{note}{ignored}")
     values = hm.split("X-Frame-Options")
     if values is None:
         return Finding("clickjacking", FAIL, "neither CSP frame-ancestors nor X-Frame-Options DENY/SAMEORIGIN is set")

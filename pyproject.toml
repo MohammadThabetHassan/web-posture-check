@@ -8,7 +8,8 @@ name = "web-posture-check"
 dynamic = ["version"]
 description = "Check a website's security posture from the command line: headers, cookies, CORS, TLS, CAA, security.txt, SPF, DMARC and DKIM"
 readme = "README.md"
-license = "MIT"
+# The code is MIT; the bundled Public Suffix List (src/webposture/public_suffix_list.dat) is MPL-2.0.
+license = "MIT AND MPL-2.0"
 license-files = ["LICENSE"]
 authors = [{ name = "Mohammad Thabet" }, { name = "Omar Alraas" }]
 requires-python = ">=3.9"
@@ -65,8 +66,8 @@ version = { attr = "webposture.__version__" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-# PEP 561: the package ships its type annotations.
-webposture = ["py.typed"]
+# PEP 561 type information, and the Public Suffix List (publicsuffix.py).
+webposture = ["py.typed", "public_suffix_list.dat"]
 
 [tool.ruff]
 target-version = "py39"

@@ -79,8 +79,9 @@ jobs:
           python -m pip install --quiet build twine
           python -m build
           python -m twine check --strict dist/*
-          # PEP 561: the wheel must carry the type marker.
+          # The wheel must carry the type marker (PEP 561) and the Public Suffix List.
           python -m zipfile -l dist/*.whl | grep -q "webposture/py.typed"
+          python -m zipfile -l dist/*.whl | grep -q "webposture/public_suffix_list.dat"
       - name: The wheel works on its own, without the dns extra
         run: |
           python -m venv "$RUNNER_TEMP/plain"
@@ -88,6 +89,7 @@ jobs:
           cd "$RUNNER_TEMP"
           plain/bin/web-posture-check --version
           plain/bin/web-posture-check --list-checks
+          plain/bin/python -c "from webposture import publicsuffix; assert publicsuffix.is_public_suffix('co.uk')"
           # Nothing listens on port 9, so this is the unreachable-target path:
           # exit code 2 and still a JSON document that names the error.
           set +e

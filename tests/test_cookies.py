@@ -315,6 +315,18 @@ class BrowserStoreRulesTest(unittest.TestCase):
         self.assertEqual(key("a", {"domain": "[::1]"}, "http://[::1]/"), ("a", "::1", True, "/"))
         self.assertTrue(cookies.secure_origin("http://localhost.:8080/"))
 
+    def test_a_public_suffix_domain_is_refused_unless_it_is_the_host(self):
+        # Checked in Chromium, Firefox and WebKit, private suffixes included.
+        key = cookies.cookie_key
+        for domain, url in (("co.uk", "https://a.b.co.uk/"), ("github.io", "https://x.github.io/"),
+                            ("herokuapp.com", "https://app.herokuapp.com/"), ("foo.ck", "https://a.foo.ck/"),
+                            ("zzunknowntld", "https://a.b.zzunknowntld/")):
+            self.assertIsNone(key("a", {"domain": domain}, url), domain)
+        self.assertEqual(key("a", {"domain": "b.co.uk"}, "https://a.b.co.uk/"), ("a", "b.co.uk", False, "/"))
+        self.assertEqual(key("a", {"domain": "www.ck"}, "https://www.ck/"), ("a", "www.ck", False, "/"))
+        # The host itself may name its own public suffix; the cookie is then host-only (Chromium and Firefox).
+        self.assertEqual(key("a", {"domain": "github.io"}, "https://github.io/"), ("a", "github.io", True, "/"))
+
     def test_plain_http_cannot_overlay_a_secure_cookie_in_either_domain_direction(self):
         # RFC 6265bis 5.7: blocked when either domain covers the other, for the same name and an overlapping path.
         secure_host = ("sid=1; Secure; Path=/; HttpOnly; SameSite=Lax", "https://a.site.example/", True)

@@ -601,8 +601,25 @@ class CspScriptModelTest(unittest.TestCase):
         self.assertIn("script-src allows scripts from data: URLs (data:)", f.detail)
 
     def test_subdomain_wildcards_and_non_web_schemes_are_not_any_host(self):
-        for source in ("*.example.com", "https://*.example.com", "blob:", "wss://*", "chrome-extension:"):
+        for source in ("*.example.com", "https://*.example.com", "*.foo.co.uk", "blob:", "chrome-extension:", "ftp://*"):
             self.assertEqual(self._csp(f"script-src 'self' {source}").status, PASS, source)
+
+    def test_a_wildcard_under_any_public_suffix_is_any_host(self):
+        # The Public Suffix List, private section included: anyone can get a name under these.
+        for source in ("*.co.uk", "https://*.github.io", "*.cloudfront.net", "https://*.com"):
+            f = self._csp(f"script-src 'self' {source}")
+            self.assertEqual(f.status, WARN, source)
+            self.assertIn(f"({source})", f.detail)
+
+    def test_websocket_sources_allow_scripts_in_safari(self):
+        # Checked in real engines: WebKit runs a cross-origin https script under these
+        # (CSP3's scheme matching); Chromium and Firefox block it.
+        for source, reach in (("wss:", "any HTTPS host"), ("ws:", "any host"), ("wss://*", "any HTTPS host"), ("ws://*", "any host")):
+            f = self._csp(f"default-src 'self' {source}")
+            self.assertEqual(f.status, WARN, source)
+            self.assertIn(f"default-src allows scripts from {reach} ({source}; Safari lets a ws: or wss: source load scripts", f.detail)
+        # In connect-src it only governs connections, so the script policy is fine.
+        self.assertEqual(self._csp("default-src 'self'; connect-src 'self' wss:").status, PASS)
 
     def test_only_a_well_formed_nonce_or_hash_switches_off_unsafe_inline(self):
         # A nonce or hash must match the grammar; an empty one or an unfilled
@@ -662,6 +679,12 @@ class FramingStandardTest(unittest.TestCase):
             f = headers.check_framing({"Content-Security-Policy": f"frame-ancestors {value}"})
             self.assertEqual(f.status, PASS, value)
         self.assertIn("'none'", headers.check_framing({"Content-Security-Policy": "frame-ancestors"}).detail)
+
+    def test_websocket_sources_let_any_site_frame_the_page_in_safari(self):
+        # Checked in real engines: WebKit lets an https page frame it; Chromium and Firefox do not.
+        f = headers.check_framing({"Content-Security-Policy": "frame-ancestors 'self' wss:"})
+        self.assertEqual(f.status, FAIL)
+        self.assertIn("in Safari, which lets a ws: or wss: source match https sites", f.detail)
 
     def test_frame_ancestors_overrides_x_frame_options(self):
         # HTML: an enforced frame-ancestors makes browsers ignore X-Frame-Options, so DENY does not help.

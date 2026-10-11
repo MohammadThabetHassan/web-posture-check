@@ -18,6 +18,7 @@ from email.utils import parsedate_to_datetime
 from typing import NamedTuple
 from urllib.parse import urlsplit
 
+from . import publicsuffix
 from .findings import FAIL, PASS, WARN, Finding
 
 _RANK = {PASS: 0, WARN: 1, FAIL: 2}
@@ -133,15 +134,6 @@ def _domain_match(host: str, domain: str) -> bool:
     return host == domain or (host.endswith("." + domain) and not _is_ip(host))
 
 
-def _ascii(name: str) -> str:
-    """A host or domain in lower case and its ASCII (IDNA) form, as browsers compare them."""
-    name = name.lower()
-    try:
-        return name.encode("idna").decode("ascii")
-    except UnicodeError:
-        return name
-
-
 def secure_origin(url: str) -> bool:
     """Whether browsers treat url as a secure origin for Secure cookies: https://, or a loopback host
     (localhost, *.localhost, 127.0.0.0/8, ::1), which Chrome and Firefox trust over plain HTTP too."""
@@ -168,23 +160,23 @@ def cookie_key(name: str, attributes: dict[str, str], url: str = "") -> tuple[st
 
     None when the browser rejects the cookie because its Domain does not cover
     the host that set it (section 5.3, step 6). As in Chrome, an IP address (an
-    IPv6 one in brackets) and a single-label name such as localhost or com may
-    only name the host itself, which makes the cookie host-only; without a public
-    suffix list, single labels stand in for public suffixes (step 5). Hosts and
-    domains are compared in their ASCII (IDNA) form, and "Domain=." is rejected.
+    IPv6 one in brackets) and a public suffix such as com, co.uk or github.io may
+    only name the host itself, which makes the cookie host-only (step 5, with the
+    Public Suffix List; checked in Chromium and Firefox). Hosts and domains are
+    compared in their ASCII (IDNA) form, and "Domain=." is rejected.
     """
     raw_domain = attributes.get("domain", "")
     if raw_domain == ".":
         return None
-    domain = _ascii(raw_domain)
+    domain = publicsuffix.to_ascii(raw_domain)
     domain = domain[1:] if domain.startswith(".") else domain
-    host = _ascii(urlsplit(url).hostname or "") if url else ""
+    host = publicsuffix.to_ascii(urlsplit(url).hostname or "") if url else ""
     if domain and host:
         if _is_ip(host):
             if domain != (f"[{host}]" if ":" in host else host):
                 return None
             domain = ""
-        elif "." not in domain.rstrip("."):
+        elif publicsuffix.is_public_suffix(domain):
             if domain != host:
                 return None
             domain = ""

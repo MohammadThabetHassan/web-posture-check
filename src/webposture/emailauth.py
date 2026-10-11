@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 
+from . import publicsuffix
 from .findings import FAIL, PASS, SKIPPED_PREFIX, WARN, Finding
 
 INSTALL_HINT = 'install the optional DNS support with: pip install "web-posture-check[dns]"'
@@ -70,12 +71,15 @@ def lookup_txt(domain: str, timeout: float) -> tuple[list[str], str | None]:
 def dmarc_candidates(domain: str) -> list[str]:
     """Domains whose _dmarc record applies, most specific first.
 
-    Receivers fall back from a subdomain to the organizational domain
-    (RFC 7489 section 6.6.3). Without the Public Suffix List this walks up to
-    two labels, which matches it for names like shop.example.com.
+    Receivers fall back from a subdomain to its organizational domain, the
+    registrable domain by the Public Suffix List (RFC 7489 sections 3.2 and
+    6.6.3): shop.example.co.uk, then example.co.uk, never co.uk. The parents in
+    between are asked too, as the DNS tree walk of DMARCbis does.
     """
+    domain = publicsuffix.to_ascii(domain).rstrip(".")
+    organizational = publicsuffix.registrable_domain(domain) or domain
     labels = domain.split(".")
-    return [".".join(labels[i:]) for i in range(max(len(labels) - 1, 1))]
+    return [".".join(labels[i:]) for i in range(max(len(labels) - organizational.count("."), 1))]
 
 
 def dmarc_records(txt_strings: Iterable[str]) -> list[str]:
