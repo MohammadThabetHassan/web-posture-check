@@ -76,12 +76,13 @@ def location_problem(path: str) -> str | None:
 
 
 def escape_text(text: str) -> str:
-    """Plain text for a SARIF message, where "[text](target)" would be a link (SARIF 2.1.0 section 3.11.6).
+    """Plain text for a SARIF message, where "[text](target)" would be a link (SARIF 2.1.0 section 3.11.6)
+    and "{0}" a placeholder (section 3.11.5).
 
     Findings quote the site, so its brackets and backslashes are escaped and
-    cannot form a link in the code scanning alert.
+    its braces doubled: they cannot form a link or a placeholder in the alert.
     """
-    return text.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+    return text.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]").replace("{", "{{").replace("}", "}}")
 
 
 def anchor_uri(path: str) -> str:

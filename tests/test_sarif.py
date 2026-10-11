@@ -51,11 +51,11 @@ class SarifRenderTest(unittest.TestCase):
 
     def test_site_text_cannot_form_a_link_in_a_message(self):
         # In SARIF plain text, "[text](target)" is a link (section 3.11.6); the site's brackets are escaped.
-        log = _render([_result("https://example.com/", Finding("information-leakage", "WARN", "Server: [fix](https://evil.example) a\\b"))],
+        log = _render([_result("https://example.com/", Finding("information-leakage", "WARN", "Server: [fix](https://evil.example) a\\b {0}"))],
                       errors=["could not fetch https://x/: [x](https://evil.example)"])
         run = log["runs"][0]
         self.assertEqual(run["results"][0]["message"]["text"],
-                         "information-leakage: Server: \\[fix\\](https://evil.example) a\\\\b (https://example.com/)")
+                         "information-leakage: Server: \\[fix\\](https://evil.example) a\\\\b {{0}} (https://example.com/)")
         self.assertEqual(run["invocations"][0]["toolExecutionNotifications"][0]["message"]["text"],
                          "could not fetch https://x/: \\[x\\](https://evil.example)")
 
@@ -191,7 +191,9 @@ class SarifCliTest(unittest.TestCase):
     def test_a_sarif_location_outside_the_repository_is_a_usage_error(self):
         for path in ("/etc/passwd", "../outside.yml"):
             err = io.StringIO()
-            with mock.patch("sys.stderr", err), self.assertRaises(SystemExit) as ctx:
+            # The fetch is mocked so that, if validation ever regressed, no request leaves the machine.
+            with mock.patch.object(fetch, "fetch_headers", return_value=("https://example.com/", {}, [], 200)), \
+                    mock.patch("sys.stderr", err), redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as ctx:
                 cli.main(["example.com", "--format", "sarif", "--sarif-location", path])
             self.assertEqual(ctx.exception.code, 2, path)
             self.assertIn("--sarif-location must", err.getvalue())
