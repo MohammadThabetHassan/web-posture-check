@@ -59,7 +59,7 @@ class LookupCaaTest(unittest.TestCase):
         with mock.patch.dict(sys.modules, blocked):
             found_on, _records, problem = caa.lookup_caa("example.com", 5)
         self.assertIsNone(found_on)
-        self.assertIn("web-posture-check[dns]", problem)
+        self.assertIn("web-posture-check[dns]", str(problem))
 
     @unittest.skipUnless(HAVE_DNSPYTHON, "needs the optional dns extra")
     def test_climbs_to_parent_when_host_has_no_caa(self):

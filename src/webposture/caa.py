@@ -4,6 +4,10 @@ Lookups use the optional dnspython package, like the email checks.
 check_caa takes the records and needs no network access.
 """
 
+from __future__ import annotations
+
+from collections.abc import Iterable
+
 from .emailauth import INSTALL_HINT
 from .findings import PASS, SKIPPED_PREFIX, WARN, Finding
 
@@ -12,8 +16,11 @@ from .findings import PASS, SKIPPED_PREFIX, WARN, Finding
 KNOWN_TAGS = {"issue", "issuewild", "iodef", "issuemail", "contactemail", "contactphone"}
 CRITICAL_FLAG = 128
 
+# One CAA record: (flags, tag, value).
+CaaRecord = tuple[int, str, str]
 
-def _issuers(records, tag):
+
+def _issuers(records: Iterable[CaaRecord], tag: str) -> list[str]:
     """CA domains named by a tag; an empty value (';') names none."""
     names = []
     for _, record_tag, value in records:
@@ -24,7 +31,7 @@ def _issuers(records, tag):
     return sorted(set(names))
 
 
-def check_caa(found_on, records):
+def check_caa(found_on: str | None, records: Iterable[CaaRecord]) -> Finding:
     """records is a list of (flags, tag, value) from the CAA RRset at found_on, or empty."""
     if not found_on:
         return Finding("caa", WARN, "no CAA record, so any certificate authority may issue certificates for this host")
@@ -42,7 +49,7 @@ def check_caa(found_on, records):
     return Finding("caa", PASS, detail)
 
 
-def caa_candidates(host):
+def caa_candidates(host: str) -> list[str]:
     """The names whose CAA RRset can apply to host, most specific first.
 
     RFC 8659 section 3: a CA climbs from the host towards the root, stopping at
@@ -53,7 +60,7 @@ def caa_candidates(host):
     return [".".join(labels[i:]) for i in range(len(labels))]
 
 
-def lookup_caa(host, timeout):
+def lookup_caa(host: str, timeout: float) -> tuple[str | None, list[CaaRecord], str | None]:
     """Return (found_on, records, problem). Climbs from host to its parent domains (RFC 8659 section 3)."""
     try:
         import dns.exception

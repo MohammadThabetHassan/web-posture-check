@@ -65,8 +65,8 @@ class LookupTxtTest(unittest.TestCase):
         blocked = {"dns": None, "dns.resolver": None, "dns.exception": None}
         with mock.patch.dict(sys.modules, blocked):
             txt, problem = emailauth.lookup_txt("example.com", 5)
-        self.assertIsNone(txt)
-        self.assertIn("web-posture-check[dns]", problem)
+        self.assertEqual(txt, [])
+        self.assertIn("web-posture-check[dns]", str(problem))
 
     @unittest.skipUnless(HAVE_DNSPYTHON, "needs the optional dns extra")
     def test_split_txt_strings_are_joined_without_spaces(self):

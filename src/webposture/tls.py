@@ -4,9 +4,12 @@ fetch_certificate does the network part; check_certificate takes its result
 and returns a Finding, so the rules can be tested without network access.
 """
 
+from __future__ import annotations
+
 import socket
 import ssl
 import warnings
+from collections.abc import Mapping
 from datetime import datetime, timezone
 
 from .findings import FAIL, PASS, WARN, Finding
@@ -19,7 +22,7 @@ EXPIRY_WARN_DAYS = 14
 VERIFY_CODE_EXPIRED = 10
 
 
-def fetch_certificate(host, port=443, timeout=10.0):
+def fetch_certificate(host: str, port: int = 443, timeout: float = 10.0) -> tuple[datetime | None, int | None, str | None]:
     """Return (not_after, verify_code, verify_message).
 
     not_after is a UTC datetime when the certificate verifies. When it does not,
@@ -40,7 +43,8 @@ def fetch_certificate(host, port=443, timeout=10.0):
     return not_after, None, None
 
 
-def check_certificate(not_after, verify_code, verify_message, now):
+def check_certificate(not_after: datetime | None, verify_code: int | None, verify_message: str | None,
+                      now: datetime) -> Finding:
     if verify_code == VERIFY_CODE_EXPIRED:
         return Finding("tls-certificate", FAIL, "certificate has expired")
     if not_after is None:
@@ -68,14 +72,14 @@ UNTESTABLE = "untestable"
 _LOCAL_REASONS = {"NO_CIPHERS_AVAILABLE", "NO_PROTOCOLS_AVAILABLE", "NO_SUITABLE_SIGNATURE_ALGORITHM"}
 
 
-def _legacy_versions():
+def _legacy_versions() -> list[tuple[str, ssl.TLSVersion]]:
     # TLSv1 and TLSv1_1 are deprecated names in the ssl module; that is the point.
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
         return [("TLS 1.0", ssl.TLSVersion.TLSv1), ("TLS 1.1", ssl.TLSVersion.TLSv1_1)]
 
 
-def classify_handshake_error(err):
+def classify_handshake_error(err: BaseException) -> str:
     """Map a failed legacy handshake to REFUSED (server said no) or UNTESTABLE (we could not ask)."""
     if isinstance(err, ssl.SSLError):
         return UNTESTABLE if getattr(err, "reason", None) in _LOCAL_REASONS else REFUSED
@@ -85,7 +89,7 @@ def classify_handshake_error(err):
     return REFUSED
 
 
-def probe_version(host, port, version, timeout=10.0):
+def probe_version(host: str, port: int, version: ssl.TLSVersion, timeout: float = 10.0) -> str:
     """Try a handshake that only allows one TLS version. Returns ACCEPTED, REFUSED or UNTESTABLE."""
     context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
     # Only the protocol version matters here; the certificate is checked elsewhere.
@@ -110,7 +114,7 @@ def probe_version(host, port, version, timeout=10.0):
         return classify_handshake_error(err)
 
 
-def check_legacy_protocols(results):
+def check_legacy_protocols(results: Mapping[str, str]) -> Finding:
     """results maps a label such as 'TLS 1.0' to ACCEPTED, REFUSED or UNTESTABLE."""
     accepted = [label for label, outcome in results.items() if outcome == ACCEPTED]
     untestable = [label for label, outcome in results.items() if outcome == UNTESTABLE]
@@ -121,5 +125,5 @@ def check_legacy_protocols(results):
     return Finding("tls-protocols", PASS, f"server refuses {', '.join(results)}")
 
 
-def probe_legacy_protocols(host, port=443, timeout=10.0):
+def probe_legacy_protocols(host: str, port: int = 443, timeout: float = 10.0) -> dict[str, str]:
     return {label: probe_version(host, port, version, timeout) for label, version in _legacy_versions()}

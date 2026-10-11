@@ -11,19 +11,23 @@ from __future__ import annotations
 
 import ipaddress
 import ssl
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Literal
 from urllib.parse import urlsplit
 
 from . import caa, checks, cookies, cors, emailauth, fetch, headers, securitytxt, tls, transport
-from .findings import FAIL, SKIPPED_PREFIX, WARN, Finding
+from .findings import FAIL, SKIPPED_PREFIX, WARN, Finding, ScanResult
 from .headermap import HeaderMap
 
 # Every check name in report order, and each one's summary (kept here for
 # callers that used runner.ALL_CHECKS and runner.CHECK_SUMMARIES).
 ALL_CHECKS = list(checks.NAMES)
 CHECK_SUMMARIES = checks.SUMMARIES
+
+# What scanning one target gives: its result and the exit code.
+Outcome = tuple[ScanResult, int]
 
 
 @dataclass(frozen=True)
@@ -50,7 +54,7 @@ class ScanOptions:
         return self.skip is None or name not in self.skip
 
 
-def normalise_target(target):
+def normalise_target(target: str) -> str:
     """Turn a target into the URL to fetch, or raise ValueError saying why it cannot be checked.
 
     A bare domain or host:port is fetched over https://. Only http:// and https://
@@ -81,7 +85,7 @@ def normalise_target(target):
     return url
 
 
-def probe_cors(url, timeout, context=None):
+def probe_cors(url: str, timeout: float, context: ssl.SSLContext | None = None) -> Finding:
     """Request url as if from a foreign origin and check what CORS allows."""
     try:
         _, probe_headers, _, _ = fetch.fetch_headers(url, timeout, {"Origin": cors.PROBE_ORIGIN}, context=context)
@@ -92,10 +96,11 @@ def probe_cors(url, timeout, context=None):
     return cors.check_cors(allowed.combined("Access-Control-Allow-Origin"), allowed.combined("Access-Control-Allow-Credentials"))
 
 
-def check_tls(url, timeout):
+def check_tls(url: str, timeout: float) -> Finding:
     """Check the certificate of the host that served the final URL (always verifying)."""
     parts = urlsplit(url)
-    if parts.scheme != "https":
+    # (A fetched https:// URL always has a host name; the test is for the type checker.)
+    if parts.scheme != "https" or not parts.hostname:
         return Finding("tls-certificate", WARN, "the final URL is not HTTPS, so there is no certificate to check")
     try:
         not_after, verify_code, verify_message = tls.fetch_certificate(parts.hostname, parts.port or 443, timeout)
@@ -104,15 +109,15 @@ def check_tls(url, timeout):
     return tls.check_certificate(not_after, verify_code, verify_message, now=datetime.now(timezone.utc))
 
 
-def check_legacy_tls(url, timeout):
+def check_legacy_tls(url: str, timeout: float) -> Finding:
     """Check whether the host that served the final URL still accepts TLS 1.0 or 1.1."""
     parts = urlsplit(url)
-    if parts.scheme != "https":
+    if parts.scheme != "https" or not parts.hostname:
         return Finding("tls-protocols", WARN, "the final URL is not HTTPS, so TLS versions were not checked")
     return tls.check_legacy_protocols(tls.probe_legacy_protocols(parts.hostname, parts.port or 443, timeout))
 
 
-def check_security_txt(url, timeout, context=None):
+def check_security_txt(url: str, timeout: float, context: ssl.SSLContext | None = None) -> Finding:
     """Fetch /.well-known/security.txt from the final URL's origin and check it."""
     parts = urlsplit(url)
     # A real security.txt is a few KB.
@@ -120,7 +125,7 @@ def check_security_txt(url, timeout, context=None):
     return securitytxt.check_security_txt(status, content_type, body, now=datetime.now(timezone.utc))
 
 
-def dns_not_applicable(url):
+def dns_not_applicable(url: str) -> str | None:
     """Why the DNS checks do not apply to url's host, as a skipped detail, or None when they do.
 
     An IP address has no domain to look up, and a name without a dot (localhost,
@@ -138,7 +143,7 @@ def dns_not_applicable(url):
     return None
 
 
-def check_spf(url, timeout):
+def check_spf(url: str, timeout: float) -> Finding:
     """Check the SPF record of the site's mail domain (www. stripped from the host)."""
     skipped = dns_not_applicable(url)
     if skipped:
@@ -150,7 +155,7 @@ def check_spf(url, timeout):
     return emailauth.check_spf(domain, txt)
 
 
-def check_dmarc(url, timeout):
+def check_dmarc(url: str, timeout: float) -> Finding:
     """Find the DMARC record that applies to the site's mail domain and check it."""
     skipped = dns_not_applicable(url)
     if skipped:
@@ -165,14 +170,14 @@ def check_dmarc(url, timeout):
     return emailauth.check_dmarc(None, [])
 
 
-def check_dkim(url, timeout, selectors=None):
+def check_dkim(url: str, timeout: float, selectors: Sequence[str] | None = None) -> Finding:
     """Look for DKIM keys under the given selectors, or under common ones when none are given."""
     skipped = dns_not_applicable(url)
     if skipped:
         return Finding("dkim", WARN, skipped)
     domain = emailauth.mail_domain(urlsplit(url).hostname)
     explicit = bool(selectors)
-    keys = {}
+    keys: dict[str, str | None] = {}
     for selector in selectors or emailauth.COMMON_DKIM_SELECTORS:
         txt, problem = emailauth.lookup_txt(f"{selector}._domainkey.{domain}", timeout)
         if problem:
@@ -181,7 +186,7 @@ def check_dkim(url, timeout, selectors=None):
     return emailauth.check_dkim(domain, keys, explicit)
 
 
-def check_caa(url, timeout):
+def check_caa(url: str, timeout: float) -> Finding:
     """Check which CAs may issue for the host that served the final URL."""
     skipped = dns_not_applicable(url)
     if skipped:
@@ -192,17 +197,22 @@ def check_caa(url, timeout):
     return caa.check_caa(found_on, records)
 
 
-def scan(target, options):
-    """Run the selected checks on one target.
+def failed(url: str, error: str) -> ScanResult:
+    """The result for a target that could not be scanned: no status, no findings, and why."""
+    return {"url": url, "status": None, "findings": [], "note": None, "error": error}
 
-    Returns (result or None, exit code, error message or None). The error is
-    returned rather than printed, so the caller can print the errors of
-    targets scanned in parallel in a stable order.
+
+def scan(target: str, options: ScanOptions) -> Outcome:
+    """Run the selected checks on one target and return (result, exit code).
+
+    A target that could not be (fully) scanned has an "error" in its result
+    and exit code 2. Nothing is printed, so the caller can report targets
+    scanned in parallel in a stable order.
     """
     try:
         url = normalise_target(target)
     except ValueError as err:
-        return None, 2, f"invalid target {target!r}: {err}"
+        return failed(target.strip(), f"invalid target {target!r}: {err}"), 2
     try:
         fetched = fetch.fetch_with_retries(url, options.timeout, options.retries)
     except fetch.FETCH_ERRORS as err:
@@ -214,12 +224,12 @@ def scan(target, options):
             if options.insecure:
                 return _scan_insecure(url, options, finding)
             return {"url": url, "status": None, "findings": [finding],
-                    "note": "other checks skipped: no trusted HTTPS connection (--insecure runs them anyway)"}, 1, None
-        return None, 2, fetch.describe_fetch_error(url, err, options.timeout, options.retries + 1)
-    return (*run_checks(url, fetched, options), None)
+                    "note": "other checks skipped: no trusted HTTPS connection (--insecure runs them anyway)"}, 1
+        return failed(url, fetch.describe_fetch_error(url, err, options.timeout, options.retries + 1)), 2
+    return run_checks(url, fetched, options)
 
 
-def _scan_insecure(url, options, cert_finding):
+def _scan_insecure(url: str, options: ScanOptions, cert_finding: Finding) -> Outcome:
     """Run the checks without certificate verification after the certificate failed.
 
     The unverified context is created here and passed down explicitly, so it
@@ -233,25 +243,26 @@ def _scan_insecure(url, options, cert_finding):
     try:
         fetched = fetch.fetch_with_retries(url, options.timeout, options.retries, context=context)
     except fetch.FETCH_ERRORS as err:
-        result = {"url": url, "status": None, "findings": [cert_finding],
-                  "note": "other checks skipped: the target could not be fetched even without certificate verification"}
-        return result, 2, fetch.describe_fetch_error(url, err, options.timeout, options.retries + 1)
+        return {"url": url, "status": None, "findings": [cert_finding],
+                "note": "other checks skipped: the target could not be fetched even without certificate verification",
+                "error": fetch.describe_fetch_error(url, err, options.timeout, options.retries + 1)}, 2
     result, code = run_checks(url, fetched, options, context=context)
     # check_tls verifies on its own and would repeat the same failure.
     others = [f for f in result["findings"] if f.check != "tls-certificate"]
     result["findings"] = [cert_finding, *others]
     result["note"] = "certificate not trusted; the other checks ran with --insecure (no certificate verification)"
-    return result, max(code, 1), None
+    return result, max(code, 1)
 
 
-def run_checks(url, fetched, options, context=None):
+def run_checks(url: str, fetched: fetch.FetchResult, options: ScanOptions,
+               context: ssl.SSLContext | None = None) -> tuple[ScanResult, int]:
     """Run the selected checks on a fetched target. Returns (result, exit code)."""
     final_url, response_headers, set_cookies, status = fetched
 
     # Checks that need their own requests are wrapped in lambdas, so a check
     # left out with --only/--skip never touches the network.
     http_url = transport.http_url_for(url)
-    later = [
+    later: list[tuple[str, Callable[[], Finding]]] = [
         ("cookies", lambda: cookies.check_cookies(set_cookies, final_url.startswith("https://"))),
         ("cors", lambda: probe_cors(final_url, options.timeout, context=context)),
         ("tls-certificate", lambda: check_tls(final_url, options.timeout)),
@@ -271,7 +282,7 @@ def run_checks(url, fetched, options, context=None):
     return {"url": final_url, "status": status, "findings": findings, "note": None}, exit_code(findings, options.fail_on)
 
 
-def exit_code(findings, fail_on):
+def exit_code(findings: Iterable[Finding], fail_on: str) -> int:
     """1 if any finding is at or above the --fail-on level, else 0.
 
     With --fail-on warn, findings reported as skipped (a check that could not

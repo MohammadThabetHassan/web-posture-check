@@ -30,6 +30,7 @@ classifiers = [
     "Topic :: Internet :: WWW/HTTP",
     "Topic :: Security",
     "Topic :: System :: Networking :: Monitoring",
+    "Typing :: Typed",
 ]
 dependencies = []
 
@@ -61,6 +62,10 @@ version = { attr = "webposture.__version__" }
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+# PEP 561: the package ships its type annotations.
+webposture = ["py.typed"]
+
 [tool.ruff]
 target-version = "py39"
 line-length = 130
@@ -82,12 +87,27 @@ ignore = ["E501"]
 # The oldest version mypy still checks; the code itself supports 3.9 (CI tests it there).
 python_version = "3.10"
 files = ["src", "tests"]
-# The code is mostly unannotated, so check inside every function too.
+# Everything, tests included, is checked inside every function.
 check_untyped_defs = true
 strict_equality = true
 warn_unreachable = true
 warn_unused_ignores = true
 warn_redundant_casts = true
+warn_unused_configs = true
+
+[[tool.mypy.overrides]]
+# The package itself is fully annotated and gets the rest of what --strict
+# checks; tests need not annotate every test method.
+module = ["webposture", "webposture.*"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+disallow_untyped_calls = true
+disallow_untyped_decorators = true
+disallow_any_generics = true
+disallow_subclassing_any = true
+warn_return_any = true
+no_implicit_reexport = true
+extra_checks = true
 
 [tool.coverage.run]
 branch = true

@@ -7,6 +7,7 @@ import threading
 import time
 import unittest
 import urllib.error
+from collections.abc import Callable
 from contextlib import redirect_stdout
 from unittest import mock
 
@@ -335,7 +336,7 @@ class RetryTest(unittest.TestCase):
     OK: tuple = ("https://example.com/", {"Strict-Transport-Security": "max-age=31536000"}, [], 200)
 
     def setUp(self):
-        sleep = mock.patch.object(fetch.time, "sleep")
+        sleep = mock.patch.object(time, "sleep")
         self.sleep = sleep.start()
         self.addCleanup(sleep.stop)
 
@@ -734,15 +735,15 @@ class RobustnessTest(unittest.TestCase):
 
     def test_an_unexpected_exception_is_one_targets_error(self):
         with mock.patch.object(runner, "scan", side_effect=RuntimeError("boom")):
-            result, code, error = cli.scan_safely("example.com", runner.ScanOptions())
-        self.assertEqual((result, code), (None, 2))
-        self.assertIn("unexpected error while scanning 'example.com': RuntimeError: boom", error)
-        self.assertIn("issues", error)
+            result, code = cli.scan_safely("example.com", runner.ScanOptions())
+        self.assertEqual((result["url"], result["findings"], code), ("https://example.com", [], 2))
+        self.assertIn("unexpected error while scanning 'example.com': RuntimeError: boom", result["error"])
+        self.assertIn("issues", result["error"])
 
     def test_error_lines_cannot_drive_the_terminal(self):
         err = io.StringIO()
         message = "could not fetch https://evil.example/: \x1b]52;c;ZXZpbA==\x07"
-        with mock.patch.object(runner, "scan", return_value=(None, 2, message)), \
+        with mock.patch.object(runner, "scan", return_value=(runner.failed("https://evil.example/", message), 2)), \
                 redirect_stdout(io.StringIO()), mock.patch("sys.stderr", err):
             cli.main(["evil.example"])
         self.assertEqual(err.getvalue(), "error: could not fetch https://evil.example/: \\x1b]52;c;ZXZpbA==\\x07\n")
@@ -775,8 +776,11 @@ class RobustnessTest(unittest.TestCase):
         self.assertIn("interrupted", err.getvalue())
 
     def test_exit_now_flushes_and_leaves_with_the_code(self):
-        with mock.patch.object(cli.os, "_exit") as leave:
-            cli.exit_now(130)
+        # exit_now never returns, so the type checker would call the lines after it
+        # unreachable; with os._exit mocked it does return.
+        exit_now: Callable[[int], object] = cli.exit_now
+        with mock.patch.object(os, "_exit") as leave:
+            exit_now(130)
         leave.assert_called_once_with(130)
 
     def test_a_closed_pipe_is_not_a_traceback(self):

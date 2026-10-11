@@ -34,18 +34,18 @@ class WrapperProblemTest(unittest.TestCase):
         self.assertIn("could not run the CORS probe: connection reset", finding.detail)
 
     def test_spf_lookup_problem_warns(self):
-        with mock.patch.object(emailauth, "lookup_txt", return_value=(None, "DNS lookup for example.com failed: Timeout")):
+        with mock.patch.object(emailauth, "lookup_txt", return_value=([], "DNS lookup for example.com failed: Timeout")):
             finding = runner.check_spf("https://www.example.com/", 5)
         self.assertEqual((finding.check, finding.status), ("spf", WARN))
         self.assertIn("Timeout", finding.detail)
 
     def test_dmarc_lookup_problem_warns(self):
-        with mock.patch.object(emailauth, "lookup_txt", return_value=(None, "DNS lookup failed: Timeout")):
+        with mock.patch.object(emailauth, "lookup_txt", return_value=([], "DNS lookup failed: Timeout")):
             finding = runner.check_dmarc("https://example.com/", 5)
         self.assertEqual((finding.check, finding.status), ("dmarc", WARN))
 
     def test_dkim_lookup_problem_warns(self):
-        with mock.patch.object(emailauth, "lookup_txt", return_value=(None, "DNS lookup failed: Timeout")):
+        with mock.patch.object(emailauth, "lookup_txt", return_value=([], "DNS lookup failed: Timeout")):
             finding = runner.check_dkim("https://example.com/", 5)
         self.assertEqual((finding.check, finding.status), ("dkim", WARN))
 
@@ -74,19 +74,19 @@ class DnsLookupTest(unittest.TestCase):
 
     def test_txt_lookup_error_is_reported(self):
         with mock.patch.object(dns.resolver, "resolve", side_effect=dns.exception.Timeout()):
-            self.assertEqual(emailauth.lookup_txt("example.com", 5), (None, "DNS lookup for example.com failed: Timeout"))
+            self.assertEqual(emailauth.lookup_txt("example.com", 5), ([], "DNS lookup for example.com failed: Timeout"))
 
 
 class InsecureFetchFailureTest(unittest.TestCase):
     def test_target_that_fails_even_unverified_keeps_the_certificate_finding(self):
         options = runner.ScanOptions(insecure=True, retries=0)
         with mock.patch.object(fetch, "fetch_with_retries", side_effect=[_cert_error(), urllib.error.URLError("refused")]):
-            result, code, error = runner.scan("bad-cert.example", options)
+            result, code = runner.scan("bad-cert.example", options)
         # Nothing could be fetched, so the target was not scanned: exit 2, as for any unreachable target.
         self.assertEqual(code, 2)
         self.assertEqual([(f.check, f.status) for f in result["findings"]], [("tls-certificate", FAIL)])
-        self.assertIn("even without certificate verification", result["note"])
-        self.assertIn("bad-cert.example", error)
+        self.assertIn("even without certificate verification", str(result["note"]))
+        self.assertIn("bad-cert.example", result["error"])
 
     def test_json_keeps_the_finding_the_note_and_the_error(self):
         out = io.StringIO()

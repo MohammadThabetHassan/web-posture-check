@@ -101,7 +101,7 @@ class LiveTlsTest(unittest.TestCase):
     def _trusting_our_ca(self):
         """fetch_certificate with the system trust store replaced by the test CA."""
         real = ssl.create_default_context
-        return mock.patch.object(tls.ssl, "create_default_context", side_effect=lambda *a, **k: real(cafile=self.ca))
+        return mock.patch.object(ssl, "create_default_context", side_effect=lambda *a, **k: real(cafile=self.ca))
 
     def test_certificate_from_an_unknown_ca_is_not_trusted(self):
         not_after, verify_code, verify_message = tls.fetch_certificate("localhost", self.server.port, timeout=5)
@@ -116,6 +116,7 @@ class LiveTlsTest(unittest.TestCase):
         with self._trusting_our_ca():
             not_after, verify_code, _ = tls.fetch_certificate("localhost", self.server.port, timeout=5)
         self.assertIsNone(verify_code)
+        assert not_after is not None
         expected = datetime.now(timezone.utc) + timedelta(days=CERT_DAYS)
         self.assertLess(abs(not_after - expected), timedelta(days=1))
 
@@ -123,12 +124,12 @@ class LiveTlsTest(unittest.TestCase):
         # The certificate is for localhost and 127.0.0.1 only. Connect to our server while asking for another name.
         connect = socket.create_connection
         with self._trusting_our_ca(), \
-                mock.patch.object(tls.socket, "create_connection",
+                mock.patch.object(socket, "create_connection",
                                   side_effect=lambda address, timeout: connect(("127.0.0.1", address[1]), timeout)):
             not_after, verify_code, verify_message = tls.fetch_certificate("wrong.example", self.server.port, timeout=5)
         self.assertIsNone(not_after)
         self.assertTrue(verify_code)
-        self.assertIn("mismatch", verify_message.lower())
+        self.assertIn("mismatch", str(verify_message).lower())
 
     def test_runner_check_tls_passes_a_trusted_certificate(self):
         with self._trusting_our_ca():
@@ -165,7 +166,7 @@ class TlsWithoutServerTest(unittest.TestCase):
         self.assertEqual(runner.check_legacy_tls("http://example.com/", 5).status, WARN)
 
     def test_version_the_local_library_cannot_set_is_untestable(self):
-        with mock.patch.object(tls.ssl.SSLContext, "set_ciphers", side_effect=ssl.SSLError("no cipher match")):
+        with mock.patch.object(ssl.SSLContext, "set_ciphers", side_effect=ssl.SSLError("no cipher match")):
             self.assertEqual(tls.probe_version("127.0.0.1", 1, ssl.TLSVersion.TLSv1_2, timeout=1), tls.UNTESTABLE)
 
     def test_a_certificate_without_an_expiry_date_is_not_trusted(self):
@@ -181,8 +182,8 @@ class TlsWithoutServerTest(unittest.TestCase):
 
         context = mock.Mock()
         context.wrap_socket.return_value = FakeTls()
-        with mock.patch.object(tls.ssl, "create_default_context", return_value=context), \
-                mock.patch.object(tls.socket, "create_connection", return_value=FakeTls()):
+        with mock.patch.object(ssl, "create_default_context", return_value=context), \
+                mock.patch.object(socket, "create_connection", return_value=FakeTls()):
             self.assertEqual(tls.fetch_certificate("example.com"), (None, None, "the server sent no certificate expiry date"))
 
 

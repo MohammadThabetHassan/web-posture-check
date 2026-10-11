@@ -4,20 +4,25 @@ The work itself lives in fetch (HTTP requests), runner (one target's checks)
 and output (text, JSON and Markdown).
 """
 
+from __future__ import annotations
+
 import argparse
 import math
 import os
 import sys
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
+from typing import NoReturn
 
 from . import __version__, checks, output, runner
+from .findings import ScanResult
 from .textsafe import printable
 
 # More than this many simultaneous scans gains little and looks like a flood to the sites.
 MAX_JOBS = 16
 
 
-def parse_check_names(value):
+def parse_check_names(value: str) -> list[str]:
     """argparse type for --only/--skip: comma-separated check names, validated."""
     names = [n.strip() for n in value.split(",") if n.strip()]
     unknown = [n for n in names if n not in checks.NAMES]
@@ -34,7 +39,7 @@ CHECK_SUMMARIES = checks.SUMMARIES
 ISSUES_URL = "https://github.com/MohammadThabetHassan/web-posture-check/issues"
 
 
-def positive_seconds(value):
+def positive_seconds(value: str) -> float:
     """argparse type for --timeout: a finite number of seconds above zero."""
     try:
         seconds = float(value)
@@ -45,14 +50,14 @@ def positive_seconds(value):
     return seconds
 
 
-def read_targets_file(path):
+def read_targets_file(path: str) -> list[str]:
     """One target per line; blank lines and lines starting with # are ignored."""
     with open(path, encoding="utf-8") as handle:
         lines = [line.strip() for line in handle]
     return [line for line in lines if line and not line.startswith("#")]
 
 
-def build_parser():
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="web-posture-check",
         description="Check a website's security posture: security headers, cookies, CORS, TLS, "
@@ -98,7 +103,7 @@ def build_parser():
     return parser
 
 
-def write_file(path, text, option):
+def write_file(path: str, text: str, option: str) -> bool:
     """Write text to path as UTF-8; on failure print why and return False."""
     try:
         # UTF-8 whatever the console encoding is (Windows consoles are often not UTF-8).
@@ -110,7 +115,7 @@ def write_file(path, text, option):
     return True
 
 
-def scan_options(args):
+def scan_options(args: argparse.Namespace) -> runner.ScanOptions:
     """The scan settings from the parsed command line."""
     return runner.ScanOptions(
         timeout=args.timeout,
@@ -123,7 +128,7 @@ def scan_options(args):
     )
 
 
-def scan_safely(target, options):
+def scan_safely(target: str, options: runner.ScanOptions) -> runner.Outcome:
     """runner.scan, but a bug while scanning one target becomes that target's error, exit code 2.
 
     Without this, an unexpected exception in one thread would abort every other
@@ -132,10 +137,11 @@ def scan_safely(target, options):
     try:
         return runner.scan(target, options)
     except Exception as err:
-        return None, 2, f"unexpected error while scanning {target!r}: {type(err).__name__}: {err} (please report it at {ISSUES_URL})"
+        message = f"unexpected error while scanning {target!r}: {type(err).__name__}: {err} (please report it at {ISSUES_URL})"
+        return runner.failed(display_url(target), message), 2
 
 
-def display_url(target):
+def display_url(target: str) -> str:
     """The URL a target was scanned as, or the target itself when it is not a valid one."""
     try:
         return runner.normalise_target(target)
@@ -143,7 +149,7 @@ def display_url(target):
         return target.strip()
 
 
-def write_stdout(text):
+def write_stdout(text: str) -> bool:
     """Print the report; if the reader has gone (e.g. piped into head), stop quietly instead of a traceback.
 
     Returns True: a reader that stops early (head) has what it asked for.
@@ -159,14 +165,14 @@ def write_stdout(text):
     return True
 
 
-def exit_now(code):
+def exit_now(code: int) -> NoReturn:
     """Leave immediately, without waiting for worker threads that cannot be interrupted."""
     sys.stdout.flush()
     sys.stderr.flush()
     os._exit(code)
 
 
-def main(argv=None):
+def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.sarif_location and not (args.sarif or args.format == "sarif"):
@@ -198,15 +204,11 @@ def main(argv=None):
         print("interrupted", file=sys.stderr)
         exit_now(130)
     pool.shutdown()
-    # Every target gets an entry, in input order; one that could not be scanned carries its error.
-    results, codes, errors = [], [], []
-    for target, (result, code, error) in zip(targets, outcomes):
-        codes.append(code)
-        if error:
-            errors.append(error)
-            print(f"error: {printable(error)}", file=sys.stderr)
-            result = output.failed(display_url(target), error) if result is None else {**result, "error": error}
-        results.append(result)
+    # Every target has a result, in input order; one that could not be scanned carries its error.
+    results: list[ScanResult] = [result for result, _ in outcomes]
+    errors = [result["error"] for result in results if "error" in result]
+    for error in errors:
+        print(f"error: {printable(error)}", file=sys.stderr)
     text = output.render(args.format, results, single=len(targets) == 1, errors=errors, sarif_anchor=args.sarif_location)
     # The report comes first, and each output is attempted even if the other failed.
     written = write_file(args.output, text, "--output") if args.output else write_stdout(text)
@@ -214,7 +216,7 @@ def main(argv=None):
         written = write_file(args.sarif, output.to_sarif(results, errors, args.sarif_location), "--sarif") and written
     # The worst outcome wins: 2 (a target could not be scanned, or a report could
     # not be written) over 1 (a FAIL) over 0.
-    return max(codes) if written else 2
+    return max(code for _, code in outcomes) if written else 2
 
 
 if __name__ == "__main__":

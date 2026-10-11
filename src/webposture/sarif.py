@@ -19,20 +19,23 @@ I/O, so it can be tested directly.
   notifications, and the invocation is marked as not successful.
 """
 
+from __future__ import annotations
+
 import hashlib
 import posixpath
+from collections.abc import Mapping, Sequence
 from typing import Any
 from urllib.parse import quote, urlsplit
 
 from . import __version__
-from .findings import FAIL, SKIPPED_PREFIX, WARN
+from .findings import FAIL, SKIPPED_PREFIX, WARN, ScanResult
 
 SCHEMA = "https://json.schemastore.org/sarif-2.1.0.json"
 INFORMATION_URI = "https://github.com/MohammadThabetHassan/web-posture-check"
 LEVELS = {FAIL: "error", WARN: "warning"}
 
 
-def _rule(name, summary):
+def _rule(name: str, summary: str) -> dict[str, Any]:
     return {
         "id": name,
         "shortDescription": {"text": f"{name}: {summary}"},
@@ -47,7 +50,7 @@ def _rule(name, summary):
     }
 
 
-def artifact_uri(url):
+def artifact_uri(url: str) -> str:
     """The URL's host, port and path as a relative URI: https://example.com:8443/a -> example.com%3A8443/a.
 
     The colon is encoded, since "host:port/..." would otherwise read as a URI scheme.
@@ -60,7 +63,7 @@ def artifact_uri(url):
     return quote(host + path, safe="/%-._~!$&'()*+,;=@")
 
 
-def anchor_uri(path):
+def anchor_uri(path: str) -> str:
     """A repository file path as a relative URI: / separators, no ./ segments, percent-encoded.
 
     --sarif-location takes a path, not a URI, so a space or a % in it is
@@ -69,17 +72,18 @@ def anchor_uri(path):
     return quote(posixpath.normpath(path.replace("\\", "/")), safe="/-._~!$&'()*+,;=@")
 
 
-def _location(url, anchor):
+def _location(url: str, anchor: str | None) -> dict[str, Any]:
     physical = {"artifactLocation": {"uri": anchor_uri(anchor)}, "region": {"startLine": 1}} if anchor \
         else {"artifactLocation": {"uri": artifact_uri(url)}}
     return {"physicalLocation": physical, "logicalLocations": [{"fullyQualifiedName": url, "kind": "resource"}]}
 
 
-def _fingerprint(check, url):
+def _fingerprint(check: str, url: str) -> str:
     return hashlib.sha256(f"{check}\n{url}".encode()).hexdigest()
 
 
-def render(results, checks, summaries, errors=(), anchor=None):
+def render(results: Sequence[ScanResult], checks: Sequence[str], summaries: Mapping[str, str],
+           errors: Sequence[str] = (), anchor: str | None = None) -> dict[str, Any]:
     """Return a SARIF log (a dict) for results.
 
     checks is every check name in report order and summaries maps each name
@@ -88,7 +92,7 @@ def render(results, checks, summaries, errors=(), anchor=None):
     points to instead of a path made from the URL.
     """
     index = {name: i for i, name in enumerate(checks)}
-    sarif_results = []
+    sarif_results: list[dict[str, Any]] = []
     for result in results:
         for finding in result["findings"]:
             if finding.status not in LEVELS or finding.detail.startswith(SKIPPED_PREFIX):

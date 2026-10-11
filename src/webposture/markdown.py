@@ -15,15 +15,19 @@ image), and mentions and issue references are linked after the Markdown is
 rendered. Control characters are made visible first (textsafe.printable).
 """
 
-import re
+from __future__ import annotations
 
-from .findings import FAIL, PASS, WARN
+import re
+from collections.abc import Sequence
+from datetime import datetime
+
+from .findings import FAIL, PASS, WARN, Finding
 from .textsafe import printable
 
 _ORDER = {FAIL: 0, WARN: 1, PASS: 2}
 
 
-def _code(text, in_table=True):
+def _code(text: object, in_table: bool = True) -> str:
     """text as a code span on one line; empty text gives an empty string."""
     text = printable(str(text))
     if not text:
@@ -40,7 +44,8 @@ def _code(text, in_table=True):
     return f"{fence}{text}{fence}"
 
 
-def render(url, status, findings, version, generated_at, note=None, score=None, error=None):
+def render(url: str, status: int | None, findings: Sequence[Finding], version: str, generated_at: datetime,
+           note: str | None = None, score: tuple[int, str] | None = None, error: str | None = None) -> str:
     """The report for one target. error, if given, says why the target could not be (fully) scanned."""
     counts = {s: sum(1 for f in findings if f.status == s) for s in (FAIL, WARN, PASS)}
     status_text = f"HTTP {status}" if status is not None else "no HTTP response"

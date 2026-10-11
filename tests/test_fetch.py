@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from webposture import cookies, fetch, runner, transport
 from webposture.cookies import SetCookie
 from webposture.fetch import fetch_final_url, fetch_headers
+from webposture.headermap import HeaderMap
 
 
 def _closed_port():
@@ -160,7 +161,7 @@ class MalformedResponseTest(unittest.TestCase):
 class CorsProbeTest(unittest.TestCase):
     def test_repeated_allow_origin_is_combined_so_it_is_not_a_match(self):
         # Fetch combines repeated headers: "x, x" is not the origin x, so browsers deny access.
-        probe = fetch.FetchResult("https://example.com/", fetch.HeaderMap([
+        probe = fetch.FetchResult("https://example.com/", HeaderMap([
             ("Access-Control-Allow-Origin", "https://web-posture-check.invalid"),
             ("Access-Control-Allow-Origin", "https://web-posture-check.invalid"),
             ("Access-Control-Allow-Credentials", "true")]), [], 200)

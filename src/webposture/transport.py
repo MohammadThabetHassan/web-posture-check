@@ -4,12 +4,14 @@ The check functions take request results (a final URL or a status code) and
 return a Finding, so they can be tested without network access.
 """
 
+from __future__ import annotations
+
 from urllib.parse import urlsplit, urlunsplit
 
 from .findings import FAIL, PASS, WARN, Finding
 
 
-def http_url_for(url):
+def http_url_for(url: str) -> str:
     """Return the http:// version of a URL, keeping host, path and query.
 
     For an https:// URL an explicit port is dropped, because it belongs to the
@@ -35,7 +37,7 @@ def http_url_for(url):
     return urlunsplit(("http", host, parts.path or "/", parts.query, ""))
 
 
-def check_https_redirect(http_url, final_url):
+def check_https_redirect(http_url: str, final_url: str | None) -> Finding:
     """Check where a request to http_url ended up after following redirects.
 
     final_url is None when nothing answered on plain HTTP (connection refused
@@ -53,7 +55,7 @@ def check_https_redirect(http_url, final_url):
     return Finding("https-redirect", FAIL, f"{http_url} redirects to {final_url}, which is not HTTPS")
 
 
-def check_status(status):
+def check_status(status: int) -> Finding:
     """Flag an error response, because every other check then describes the error page.
 
     Bot protection often answers unknown clients with 403 or 429 while browsers

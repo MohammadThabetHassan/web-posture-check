@@ -4,13 +4,15 @@ The CLI requests the page again with an Origin header for a domain that
 cannot exist, then passes the response's CORS headers here. No network access.
 """
 
+from __future__ import annotations
+
 from .findings import FAIL, PASS, WARN, Finding
 
 # .invalid is reserved (RFC 2606), so no real site can legitimately be allowed.
 PROBE_ORIGIN = "https://web-posture-check.invalid"
 
 
-def check_cors(allow_origin, allow_credentials, probe_origin=PROBE_ORIGIN):
+def check_cors(allow_origin: str | None, allow_credentials: str | None, probe_origin: str = PROBE_ORIGIN) -> Finding:
     """allow_origin / allow_credentials are the Access-Control-Allow-* values, or None."""
     if allow_origin is None:
         return Finding("cors", PASS, "no Access-Control-Allow-Origin for a foreign origin")
