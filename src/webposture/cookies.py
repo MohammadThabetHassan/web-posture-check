@@ -2,17 +2,35 @@
 
 Takes the raw Set-Cookie header values (a response can carry several, so they
 must not be folded into one) and returns a Finding. No network access.
+
+Cookies are often set on a redirect (a login, or www. to the bare domain), and
+those count too: the fetch collects the Set-Cookie headers of every response in
+the redirect chain, each with the URL that sent it.
 """
 
+from __future__ import annotations
+
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from typing import NamedTuple
 
 from .findings import FAIL, PASS, WARN, Finding
 
 _RANK = {PASS: 0, WARN: 1, FAIL: 2}
 
 
-def parse_set_cookie(value):
+class SetCookie(NamedTuple):
+    """One Set-Cookie header value and the response that sent it."""
+
+    value: str
+    # The URL of the response that carried the header; its scheme decides whether Secure is required.
+    url: str
+    # True when that response was a redirect rather than the final page.
+    redirect: bool = False
+
+
+def parse_set_cookie(value: str) -> tuple[str, dict[str, str]]:
     """Return (name, attributes) where attributes maps lower-cased names to values."""
     parts = [p.strip() for p in value.split(";")]
     name = parts[0].split("=", 1)[0].strip()
@@ -25,7 +43,7 @@ def parse_set_cookie(value):
     return name, attributes
 
 
-def _prefix_violations(name, attributes):
+def _prefix_violations(name: str, attributes: dict[str, str]) -> list[str]:
     """Return the rules a __Host- or __Secure- cookie breaks, or [] if none.
 
     Browsers drop such cookies outright, so a broken prefix means the cookie
@@ -48,7 +66,7 @@ def _prefix_violations(name, attributes):
     return violations
 
 
-def _problems(name, attributes, is_https):
+def _problems(name: str, attributes: dict[str, str], is_https: bool) -> list[tuple[str, str]]:
     """Return a list of (status, message) for one cookie."""
     problems = []
     samesite = attributes.get("samesite")
@@ -69,7 +87,7 @@ def _problems(name, attributes, is_https):
     return problems
 
 
-def is_deletion(attributes, now):
+def is_deletion(attributes: dict[str, str], now: datetime) -> bool:
     """True when the Set-Cookie only removes a cookie (Max-Age <= 0 or Expires in the past).
 
     Sites clear cookies this way, often without repeating the flags, and the
@@ -92,23 +110,38 @@ def is_deletion(attributes, now):
     return False
 
 
-def check_cookies(set_cookie_values, is_https, now=None):
+def check_cookies(set_cookies: Sequence[str | SetCookie], is_https: bool, now: datetime | None = None) -> Finding:
+    """Check every cookie the response chain leaves in the browser.
+
+    set_cookies are SetCookie entries, or plain Set-Cookie values sent by the
+    final response, whose scheme is_https gives. A later Set-Cookie for the same
+    name, domain and path replaces an earlier one, as in a browser's cookie store
+    (RFC 6265 section 5.3, step 11), so a cookie set on a redirect and deleted or
+    re-set by the final page is judged by its last version.
+    """
     now = now or datetime.now(timezone.utc)
-    live = []
-    for value in set_cookie_values:
+    jar: dict[tuple[str, str, str], tuple[str, dict[str, str], bool, str | None]] = {}
+    for item in set_cookies:
+        if isinstance(item, SetCookie):
+            value, https, via = item.value, item.url.lower().startswith("https://"), item.url if item.redirect else None
+        else:
+            value, https, via = item, is_https, None
         name, attributes = parse_set_cookie(value)
-        if not is_deletion(attributes, now):
-            live.append((name, attributes))
-    ignored = len(set_cookie_values) - len(live)
-    suffix = f" ({ignored} deletion(s) ignored)" if ignored else ""
+        key = (name, attributes.get("domain", "").lower().lstrip("."), attributes.get("path", ""))
+        jar.pop(key, None)  # keep the report in the order of the last write
+        jar[key] = (name, attributes, https, via)
+    live = [entry for entry in jar.values() if not is_deletion(entry[1], now)]
+    deletions = len(jar) - len(live)
+    suffix = f" ({deletions} deletion(s) ignored)" if deletions else ""
     if not live:
         return Finding("cookies", PASS, "no cookies set" + suffix)
     status = PASS
     notes = []
-    for name, attributes in live:
-        problems = _problems(name, attributes, is_https)
+    for name, attributes, https, via in live:
+        problems = _problems(name, attributes, https)
         if problems:
-            notes.append(f"{name}: " + ", ".join(msg for _, msg in problems))
+            label = f"{name} (set by the redirect at {via})" if via else name
+            notes.append(f"{label}: " + ", ".join(msg for _, msg in problems))
             status = max([status] + [s for s, _ in problems], key=lambda s: _RANK[s])
     if not notes:
         return Finding("cookies", PASS, f"{len(live)} cookie(s), no flag problems found" + suffix)

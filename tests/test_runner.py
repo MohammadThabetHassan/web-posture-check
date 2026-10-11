@@ -1,5 +1,6 @@
 """The runner's check wrappers and lookups when something goes wrong. No network needed."""
 
+import socket
 import ssl
 import unittest
 import urllib.error
@@ -106,8 +107,10 @@ class CookieEdgeCaseTest(unittest.TestCase):
 
 class FetchFailureTest(unittest.TestCase):
     def test_fetch_text_returns_no_status_when_nothing_answers(self):
-        with mock.patch.object(fetch.urllib.request, "urlopen", side_effect=urllib.error.URLError("refused")):
-            self.assertEqual(fetch.fetch_text("https://example.com/.well-known/security.txt", 5, 1024), (None, None, ""))
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = sock.getsockname()[1]
+        self.assertEqual(fetch.fetch_text(f"http://127.0.0.1:{port}/.well-known/security.txt", 5, 1024), (None, None, ""))
 
 
 if __name__ == "__main__":

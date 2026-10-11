@@ -43,9 +43,14 @@ def check_https_redirect(http_url, final_url):
     """
     if final_url is None:
         return Finding("https-redirect", PASS, f"{http_url} is not reachable, nothing is served over plain HTTP")
-    if urlsplit(final_url).scheme == "https":
+    scheme = urlsplit(final_url).scheme.lower()
+    if scheme == "https":
         return Finding("https-redirect", PASS, f"{http_url} redirects to {final_url}")
-    return Finding("https-redirect", FAIL, f"{http_url} is served over plain HTTP without redirecting to HTTPS")
+    if scheme == "http":
+        if final_url.rstrip("/") == http_url.rstrip("/"):
+            return Finding("https-redirect", FAIL, f"{http_url} is served over plain HTTP without redirecting to HTTPS")
+        return Finding("https-redirect", FAIL, f"{http_url} redirects to {final_url}, which is still plain HTTP")
+    return Finding("https-redirect", FAIL, f"{http_url} redirects to {final_url}, which is not HTTPS")
 
 
 def check_status(status):

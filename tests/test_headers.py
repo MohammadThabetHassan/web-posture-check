@@ -314,6 +314,11 @@ class HstsStandardTest(unittest.TestCase):
         self.assertEqual(f.status, FAIL)
         self.assertIn("stop enforcing HTTPS", f.detail)
 
+    def test_empty_directives_are_skipped(self):
+        # A trailing or doubled semicolon is common in the wild and harmless.
+        f = headers.check_hsts({"Strict-Transport-Security": "max-age=31536000;; includeSubDomains;"})
+        self.assertEqual((f.status, f.detail), (PASS, "max-age=31536000; includeSubDomains"))
+
     def test_quoted_max_age_is_read(self):
         self.assertEqual(headers.check_hsts({"Strict-Transport-Security": 'max-age="31536000"'}).status, PASS)
 

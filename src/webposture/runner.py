@@ -8,12 +8,12 @@ so a test that patches the fetch module intercepts every caller.
 """
 
 import ssl
-import urllib.error
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
 
 from . import caa, cookies, cors, emailauth, fetch, headers, securitytxt, tls, transport
 from .findings import FAIL, SKIPPED_PREFIX, WARN, Finding
+from .headermap import HeaderMap
 
 # Every check name, in report order. Header check names come from the
 # headers module itself so the list cannot drift from it.
@@ -59,10 +59,11 @@ def probe_cors(url, timeout, context=None):
     """Request url as if from a foreign origin and check what CORS allows."""
     try:
         _, probe_headers, _, _ = fetch.fetch_headers(url, timeout, {"Origin": cors.PROBE_ORIGIN}, context=context)
-    except (urllib.error.URLError, OSError) as err:
+    except fetch.FETCH_ERRORS as err:
         return Finding("cors", WARN, f"could not run the CORS probe: {err}")
-    lowered = {k.lower(): v for k, v in probe_headers.items()}
-    return cors.check_cors(lowered.get("access-control-allow-origin"), lowered.get("access-control-allow-credentials"))
+    # Fetch, "CORS check": repeated headers are combined, so "x, x" is not a match for x.
+    allowed = HeaderMap(probe_headers)
+    return cors.check_cors(allowed.combined("Access-Control-Allow-Origin"), allowed.combined("Access-Control-Allow-Credentials"))
 
 
 def check_tls(url, timeout):
@@ -145,7 +146,7 @@ def scan(target, args):
     url = normalise_target(target)
     try:
         fetched = fetch.fetch_with_retries(url, args.timeout, args.retries)
-    except (urllib.error.URLError, OSError) as err:
+    except fetch.FETCH_ERRORS as err:
         reason = getattr(err, "reason", err)
         if isinstance(reason, ssl.SSLCertVerificationError):
             # A broken certificate is itself the most important finding, so
@@ -170,7 +171,7 @@ def _scan_insecure(url, args, cert_finding):
     context = fetch.unverified_context()
     try:
         fetched = fetch.fetch_with_retries(url, args.timeout, args.retries, context=context)
-    except (urllib.error.URLError, OSError) as err:
+    except fetch.FETCH_ERRORS as err:
         result = {"url": url, "status": None, "findings": [cert_finding],
                   "note": "other checks skipped: the target could not be fetched even without certificate verification"}
         return result, 1, fetch.describe_fetch_error(url, err, args.timeout, args.retries + 1)

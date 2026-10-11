@@ -143,5 +143,37 @@ class CheckCookiesTest(unittest.TestCase):
         self.assertNotIn("good:", f.detail)
 
 
+
+class CookieChainTest(unittest.TestCase):
+    """Cookies set across a redirect chain, judged like a browser's cookie store."""
+
+    def test_each_cookie_is_judged_by_the_scheme_of_the_response_that_set_it(self):
+        from webposture.cookies import SetCookie
+        f = cookies.check_cookies([SetCookie("a=1; HttpOnly; SameSite=Lax", "http://example.com/", redirect=True),
+                                   SetCookie("b=1; HttpOnly; SameSite=Lax", "https://example.com/")], is_https=True)
+        self.assertEqual(f.status, FAIL)
+        self.assertIn("b: missing Secure", f.detail)
+        self.assertNotIn("a (", f.detail)
+
+    def test_a_later_write_replaces_an_earlier_one(self):
+        from webposture.cookies import SetCookie
+        f = cookies.check_cookies([SetCookie("sid=1; Path=/", "https://example.com/start", redirect=True),
+                                   SetCookie("sid=2; Path=/; Secure; HttpOnly; SameSite=Lax", "https://example.com/")], is_https=True)
+        self.assertEqual(f.status, PASS)
+        self.assertIn("1 cookie(s)", f.detail)
+
+    def test_a_cookie_deleted_by_the_final_page_is_not_reported(self):
+        from webposture.cookies import SetCookie
+        f = cookies.check_cookies([SetCookie("sid=1; Path=/", "https://example.com/start", redirect=True),
+                                   SetCookie("sid=; Path=/; Max-Age=0", "https://example.com/")], is_https=True)
+        self.assertEqual(f.status, PASS)
+        self.assertIn("1 deletion(s) ignored", f.detail)
+
+    def test_same_name_with_another_path_is_another_cookie(self):
+        from webposture.cookies import SetCookie
+        f = cookies.check_cookies([SetCookie("sid=1; Path=/a; Secure; HttpOnly; SameSite=Lax", "https://example.com/"),
+                                   SetCookie("sid=2; Path=/b; Secure; HttpOnly; SameSite=Lax", "https://example.com/")], is_https=True)
+        self.assertIn("2 cookie(s)", f.detail)
+
 if __name__ == "__main__":
     unittest.main()
