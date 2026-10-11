@@ -36,6 +36,10 @@ RETRY_DELAY_SECONDS = 1.0
 # name urllib cannot use (ValueError, which includes IDNA errors).
 FETCH_ERRORS = (urllib.error.URLError, OSError, http.client.HTTPException, ValueError)
 
+# The ones that mean something answered, but not with a response that can be
+# read: a malformed status line or header block, or a Location that is not a URL.
+UNREADABLE = (http.client.HTTPException, ValueError)
+
 _SCHEMES = ("http", "https")
 
 
@@ -71,6 +75,12 @@ class _Recorder(urllib.request.HTTPRedirectHandler):
         self.cookies: list[SetCookie] = []
         # The URL of a redirect that was refused because it is not http(s), if any.
         self.refused: str | None = None
+
+    def redirect_request(self, req: urllib.request.Request, fp: IO[bytes], code: int, msg: str,
+                         headers: http.client.HTTPMessage, newurl: str) -> urllib.request.Request | None:
+        # Python 3.9 and 3.10 do not follow 308 (3.11 does). RFC 9110 defines it
+        # like 307 with the method kept, which for these GET requests is the same.
+        return super().redirect_request(req, fp, 307 if code == 308 else code, msg, headers, newurl)
 
     def http_error_302(self, req: urllib.request.Request, fp: IO[bytes], code: int, msg: str,
                        headers: http.client.HTTPMessage) -> Any:
@@ -161,7 +171,11 @@ def fetch_text(url: str, timeout: float, limit: int, context: ssl.SSLContext | N
 
 
 def fetch_final_url(url: str, timeout: float, context: ssl.SSLContext | None = None) -> str | None:
-    """Follow redirects from url and return where they end, or None if nothing answered."""
+    """Follow redirects from url and return where they end, or None if nothing answered.
+
+    Raises one of UNREADABLE when a server answered, before any redirect, with a
+    response that cannot be read.
+    """
     recorder = _Recorder()
     try:
         with _opener(recorder, context).open(_request(url), timeout=timeout) as response:
@@ -171,11 +185,15 @@ def fetch_final_url(url: str, timeout: float, context: ssl.SSLContext | None = N
         # looping redirect still pointed somewhere, which is what is reported.
         with err:
             return recorder.last_url if _redirect_problem(err, recorder) and recorder.last_url else str(err.geturl())
-    except FETCH_ERRORS:
-        # The server answered with a redirect but the target failed, e.g. an
-        # https:// URL with a broken certificate. The redirect still happened,
-        # so report where it pointed rather than "not reachable".
+    except OSError:
+        # Nothing answered (refused, timed out, closed without a response), or a
+        # redirect was followed and its target failed, e.g. an https:// URL with a
+        # broken certificate. The redirect still happened, so report where it pointed.
         return recorder.last_url
+    except UNREADABLE:
+        if recorder.last_url:
+            return recorder.last_url
+        raise
 
 
 def _reason(err: BaseException) -> Any:

@@ -151,6 +151,13 @@ class HttpsEndToEndTest(unittest.TestCase):
         self.assertIn("certificate valid until", details["tls-certificate"])
         self.assertIn("Contact: mailto:security@example.test", details["security-txt"])
 
+    def test_an_upper_case_scheme_is_still_https(self):
+        # urlsplit lower-cases the scheme; comparing the raw URL with "https://" did not.
+        url = self._serve(_GoodSite).replace("https://", "HTTPS://")
+        code, result = self._run(url, "--only", "hsts,cookies")
+        self.assertEqual(self._statuses(result), {"hsts": "PASS", "cookies": "PASS"})
+        self.assertEqual(code, 0)
+
     def test_https_site_without_hsts_or_secure_cookie_fails_them(self):
         code, result = self._run(self._serve(_BadSite), "--only", "hsts,cookies,tls-certificate")
         statuses = self._statuses(result)
@@ -170,6 +177,8 @@ class HttpsEndToEndTest(unittest.TestCase):
 
         code, result = self._run(url, "--only", "hsts,csp", "--insecure", trusted=False)
         self.assertEqual(self._statuses(result), {"tls-certificate": "FAIL", "hsts": "PASS", "csp": "PASS"})
+        hsts = next(f for f in result["findings"] if f["check"] == "hsts")
+        self.assertIn("browsers ignore it while the certificate is not trusted", hsts["detail"])
         self.assertIn("ran with --insecure", result["note"])
         self.assertNotIn("error", result)
         self.assertEqual(code, 1)

@@ -48,6 +48,13 @@ class _Chain(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
+        if self.path == "/p308":
+            # Python 3.9 and 3.10 do not follow 308 on their own.
+            self.send_response(308)
+            self.send_header("Location", "/final")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if self.path == "/missing":
             self.send_response(404)
             self.send_header("Content-Length", "0")
@@ -148,6 +155,12 @@ class FetchHeadersTest(_LocalServerTest):
                 gc.collect()
             self.assertEqual([str(w.message) for w in caught if w.category is ResourceWarning], [], name)
 
+    def test_308_is_followed_on_every_python(self):
+        base = self._serve(_Chain)
+        fetched = fetch_headers(base + "/p308", timeout=5)
+        self.assertEqual((fetched.url, fetched.status), (base + "/final", 200))
+        self.assertEqual(fetch_final_url(base + "/p308", timeout=5), base + "/final")
+
     def test_a_redirect_without_location_is_the_final_response(self):
         result = fetch_headers(self._serve(_Chain) + "/no-location", timeout=5)
         self.assertEqual((result.status, result.headers.get("X-Marker")), (302, "kept"))
@@ -168,23 +181,51 @@ class FetchHeadersTest(_LocalServerTest):
 
 
 class MalformedResponseTest(unittest.TestCase):
-    def test_a_garbled_response_is_explained(self):
+    def _garbage_server(self, connections=1):
+        """A server that answers each connection with something that is not HTTP."""
         listener = socket.create_server(("127.0.0.1", 0))
         self.addCleanup(listener.close)
 
         def answer():
-            conn, _ = listener.accept()
-            with conn:
-                conn.recv(1024)
-                conn.sendall(b"NOT HTTP AT ALL\r\n\r\n")
+            for _ in range(connections):
+                conn, _ = listener.accept()
+                with conn:
+                    conn.recv(1024)
+                    conn.sendall(b"NOT HTTP AT ALL\r\n\r\n")
 
         threading.Thread(target=answer, daemon=True).start()
-        url = f"http://127.0.0.1:{listener.getsockname()[1]}/"
+        return f"http://127.0.0.1:{listener.getsockname()[1]}/"
+
+    def test_a_garbled_response_is_explained(self):
+        url = self._garbage_server()
         with self.assertRaises(fetch.FETCH_ERRORS) as caught:
             fetch_headers(url, timeout=5)
         message = fetch.describe_fetch_error(url, caught.exception, 5, 1)
         self.assertIn("malformed response", message)
         self.assertIn("BadStatusLine", message)
+
+    def test_an_unreadable_plain_http_answer_is_not_nothing(self):
+        # Something answered on plain HTTP, so https-redirect must not pass as "not reachable".
+        url = self._garbage_server()
+        with self.assertRaises(fetch.UNREADABLE):
+            fetch_final_url(url, timeout=5)
+        finding = runner.check_https_redirect(self._garbage_server(), 5)
+        self.assertEqual((finding.check, finding.status), ("https-redirect", "WARN"))
+        self.assertIn("answered with a response that could not be read (BadStatusLine", finding.detail)
+
+    def test_an_unreadable_answer_after_a_redirect_still_reports_the_redirect(self):
+        garbage = self._garbage_server()
+        listener = socket.create_server(("127.0.0.1", 0))
+        self.addCleanup(listener.close)
+
+        def redirect():
+            conn, _ = listener.accept()
+            with conn:
+                conn.recv(1024)
+                conn.sendall(f"HTTP/1.1 302 Found\r\nLocation: {garbage}\r\nContent-Length: 0\r\n\r\n".encode())
+
+        threading.Thread(target=redirect, daemon=True).start()
+        self.assertEqual(fetch_final_url(f"http://127.0.0.1:{listener.getsockname()[1]}/", timeout=5), garbage)
 
 
 class CorsProbeTest(unittest.TestCase):

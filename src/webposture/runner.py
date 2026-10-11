@@ -125,6 +125,17 @@ def check_security_txt(url: str, timeout: float, context: ssl.SSLContext | None 
     return securitytxt.check_security_txt(status, content_type, body, now=datetime.now(timezone.utc))
 
 
+def check_https_redirect(http_url: str, timeout: float, context: ssl.SSLContext | None = None) -> Finding:
+    """Request the site over plain HTTP and check where the redirects end."""
+    try:
+        final_url = fetch.fetch_final_url(http_url, timeout, context=context)
+    except fetch.UNREADABLE as err:
+        # Something answered, so "nothing is served over plain HTTP" would be a false pass.
+        return Finding("https-redirect", WARN, f"{http_url} answered with a response that could not be read "
+                                               f"({type(err).__name__}: {str(err).strip()}), so the redirect was not checked")
+    return transport.check_https_redirect(http_url, final_url)
+
+
 def dns_not_applicable(url: str) -> str | None:
     """Why the DNS checks do not apply to url's host, as a skipped detail, or None when they do.
 
@@ -258,12 +269,14 @@ def run_checks(url: str, fetched: fetch.FetchResult, options: ScanOptions,
                context: ssl.SSLContext | None = None) -> tuple[ScanResult, int]:
     """Run the selected checks on a fetched target. Returns (result, exit code)."""
     final_url, response_headers, set_cookies, status = fetched
+    # urlsplit lower-cases the scheme, so HTTPS://example.com counts as HTTPS too.
+    https = urlsplit(final_url).scheme == "https"
 
     # Checks that need their own requests are wrapped in lambdas, so a check
     # left out with --only/--skip never touches the network.
     http_url = transport.http_url_for(url)
     later: list[tuple[str, Callable[[], Finding]]] = [
-        ("cookies", lambda: cookies.check_cookies(set_cookies, final_url.startswith("https://"))),
+        ("cookies", lambda: cookies.check_cookies(set_cookies, https)),
         ("cors", lambda: probe_cors(final_url, options.timeout, context=context)),
         ("tls-certificate", lambda: check_tls(final_url, options.timeout)),
         ("tls-protocols", lambda: check_legacy_tls(final_url, options.timeout)),
@@ -272,12 +285,12 @@ def run_checks(url: str, fetched: fetch.FetchResult, options: ScanOptions,
         ("spf", lambda: check_spf(final_url, options.timeout)),
         ("dmarc", lambda: check_dmarc(final_url, options.timeout)),
         ("dkim", lambda: check_dkim(final_url, options.timeout, options.dkim_selectors)),
-        ("https-redirect", lambda: transport.check_https_redirect(
-            http_url, fetch.fetch_final_url(http_url, options.timeout, context=context))),
+        ("https-redirect", lambda: check_https_redirect(http_url, options.timeout, context=context)),
     ]
     # The status goes first: when it is an error page, every finding below describes that page.
     findings = [transport.check_status(status)] if options.wanted("http-status") else []
-    findings += [f for f in headers.run(response_headers, https=final_url.startswith("https://")) if options.wanted(f.check)]
+    # With --insecure (a context), the certificate was not verified.
+    findings += [f for f in headers.run(response_headers, https=https, verified=context is None) if options.wanted(f.check)]
     findings += [run() for name, run in later if options.wanted(name)]
     return {"url": final_url, "status": status, "findings": findings, "note": None}, exit_code(findings, options.fail_on)
 
