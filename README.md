@@ -37,7 +37,7 @@ Score: 55/100 (grade F)
 ## Why web-posture-check
 
 - **20 checks in one run**, covering the response, the TLS server and the domain's DNS: what a browser, a mail server and an attacker each see from outside. [All checks](#checks).
-- **No false passes.** When a check cannot decide (a DNS lookup failed, the local OpenSSL cannot offer TLS 1.0, a DKIM selector cannot be guessed), it says so as a WARN instead of passing.
+- **No silent passes.** When a check cannot decide (a DNS lookup failed, the local OpenSSL cannot offer TLS 1.0, a DKIM selector cannot be guessed, plain HTTP answered with something unreadable), it says so as a WARN instead of passing.
 - **Grounded in the standards.** Rules follow the RFCs, the Fetch, HTML and CSP standards and OWASP guidance, and each finding explains why it matters. A repeated or comma-separated header is read the way browsers read it.
 - **Safe to point at a hostile site.** It speaks only HTTP and HTTPS, refuses redirects to other schemes, and escapes what a site sends before printing it, so a report cannot drive your terminal or add links to a pull request.
 - **Built for CI.** Exit codes, `--fail-on warn`, JSON, Markdown and SARIF reports, a score and grade, a ready-made [GitHub Action](#github-action), and findings in [GitHub code scanning](#github-code-scanning).
@@ -79,11 +79,11 @@ web-posture-check --list-checks
 | Option | What it does |
 |---|---|
 | `target ...` | Domains or URLs. A bare domain is fetched over `https://`. |
-| `--targets-file FILE` | More targets, one per line; blank lines and `#` comments are ignored. |
+| `--targets-file FILE` | More targets, one per line (UTF-8); blank lines and `#` comments are ignored. |
 | `--format text\|json\|markdown\|sarif`, `--json` | Output format (default `text`). |
 | `--output FILE` | Write the report to `FILE` as UTF-8 instead of printing it. |
 | `--sarif FILE` | Also write a SARIF 2.1.0 log to `FILE`, from the same scan. |
-| `--sarif-location PATH` | Repository file every SARIF result points to, such as the workflow that runs the scan (a path with `/` separators). By default the path is made from the URL (`example.com/login`). Needs `--sarif` or `--format sarif`. |
+| `--sarif-location PATH` | Repository file every SARIF result points to, such as the workflow that runs the scan (a path inside the repository, with `/` separators). By default the path is made from the URL (`example.com/login`). Needs `--sarif` or `--format sarif`. |
 | `--only NAMES`, `--skip NAMES` | Comma-separated check names to run or leave out. A left-out check makes no requests. |
 | `--list-checks` | Print every check name with a short description. |
 | `--fail-on fail\|warn` | Exit 1 on any FAIL (default), or on any WARN or FAIL. |
@@ -112,17 +112,17 @@ web-posture-check --list-checks
 | Check | FAIL when | WARN when |
 |---|---|---|
 | `http-status` | | the final response is HTTP 400 or higher, so the other findings describe an error page. 403, 429 and 503 are often bot protection blocking automated clients |
-| `hsts` | `Strict-Transport-Security` is missing, has no valid `max-age`, has `max-age=0` (which tells browsers to stop enforcing HTTPS) or repeats a directive (browsers then ignore it); or the final response is plain HTTP, where browsers ignore the header | `max-age` is below 6 months, or `preload` is set without the preload list's requirements (`max-age` of at least 1 year and `includeSubDomains`) |
-| `csp` | `Content-Security-Policy` is missing or empty | only the report-only header is set; no policy restricts scripts (no `script-src` or `default-src`); or the script policy allows `'unsafe-inline'` without a nonce, hash or `'strict-dynamic'`, `'unsafe-eval'`, or scripts from any host (`*`, `https:`, `http:`) or `data:` (host sources are ignored with `'strict-dynamic'`) |
+| `hsts` | `Strict-Transport-Security` is missing, has no valid `max-age`, or has `max-age=0` (which tells browsers to stop enforcing HTTPS); the header is malformed in a way that makes browsers ignore it (a repeated `max-age` or `includeSubDomains`, an `includeSubDomains` with a value, or text outside the header's grammar); or the final response is plain HTTP, where browsers ignore the header | `max-age` is below 6 months, or `preload` is set without the preload list's requirements (`max-age` of at least 1 year and `includeSubDomains`) |
+| `csp` | `Content-Security-Policy` is missing or empty | only the report-only header is set; no policy restricts scripts (no `script-src` or `default-src`); or scripts can run in a way an attacker can use: `'unsafe-inline'` without a valid nonce, hash or `'strict-dynamic'`, `'unsafe-eval'`, or scripts from any host however it is written (`*`, `http:`, `https:`, `https://*`, `*:443`) or from `data:` (host sources are ignored with `'strict-dynamic'`). Script elements are judged by `script-src-elem` and event handlers by `script-src-attr` where those are set, so a policy with only `script-src-elem` leaves event handlers and `eval()` unrestricted |
 | `x-content-type-options` | missing, or its first value is not `nosniff` | |
-| `clickjacking` | no CSP `frame-ancestors` and no `X-Frame-Options` `DENY` or `SAMEORIGIN`; `frame-ancestors` allows any site (`*`, a bare scheme such as `https:`, or `https://*`), which browsers apply instead of `X-Frame-Options`; or `X-Frame-Options` has a value browsers ignore, such as `ALLOW-FROM` | |
+| `clickjacking` | no CSP `frame-ancestors` and no `X-Frame-Options` `DENY` or `SAMEORIGIN`; `frame-ancestors` allows any website (`*`, `http:`, `https:`, or a host `*` such as `https://*`), which browsers apply instead of `X-Frame-Options`; or `X-Frame-Options` has a value browsers ignore, such as `ALLOW-FROM` | |
 | `referrer-policy` | the policy that applies is `unsafe-url` | missing, no recognised value, or `no-referrer-when-downgrade` (the full URL goes to every HTTPS site) |
 | `permissions-policy` | | missing or empty |
-| `cross-origin-isolation` | | `Cross-Origin-Opener-Policy` is missing or `unsafe-none`, `Cross-Origin-Resource-Policy` is missing, or any of the three headers has a value browsers do not recognise. A missing `Cross-Origin-Embedder-Policy` is reported but not warned about |
+| `cross-origin-isolation` | | `Cross-Origin-Opener-Policy` is missing or `unsafe-none`, `Cross-Origin-Resource-Policy` is missing, or any of the three headers has a value browsers do not recognise (a repeated header is one: browsers combine its values). A missing `Cross-Origin-Embedder-Policy` is reported but not warned about |
 | `x-xss-protection` | | set to `1` (with or without `mode=block`), which turns on the legacy XSS auditor that can be abused for XS-Leaks, or set to an invalid value |
 | `information-leakage` | | a `Server` header includes a version number, or `X-Powered-By`, `X-AspNet-Version` or `X-AspNetMvc-Version` is present |
 
-A header sent more than once is read the way browsers read it. Only the first `Strict-Transport-Security` counts (RFC 6797). Every `Content-Security-Policy` is enforced, including comma-separated policies in one header, so a script weakness counts only when every policy that restricts scripts has it, and one protective `frame-ancestors` is enough. `X-Content-Type-Options`, `X-Frame-Options` and `Referrer-Policy` are combined and split on commas (the Fetch standard): the first `X-Content-Type-Options` value decides, conflicting `X-Frame-Options` values block framing (the HTML standard), and the last recognised `Referrer-Policy` value applies.
+A header sent more than once is read the way browsers read it. Only the first `Strict-Transport-Security` counts (RFC 6797). Every `Content-Security-Policy` is enforced, including comma-separated policies in one header, so a script runs only if every policy allows it: a weakness counts when every policy that governs it has it, however each one writes it, and one protective `frame-ancestors` is enough. `X-Content-Type-Options`, `X-Frame-Options` and `Referrer-Policy` are combined and split on commas (the Fetch standard): the first `X-Content-Type-Options` value decides, conflicting `X-Frame-Options` values block framing (the HTML standard), and the last recognised `Referrer-Policy` value applies. The cross-origin policies and `X-XSS-Protection` are combined too, so two copies are an invalid value. Only tabs, spaces and line breaks around a value are ignored, as in browsers.
 
 </details>
 
@@ -134,7 +134,7 @@ A header sent more than once is read the way browsers read it. Only the first `S
 | `cookies` | a cookie on an HTTPS response lacks `Secure`; `SameSite=None` without `Secure`; a `__Secure-` cookie lacks `Secure`; a `__Host-` cookie lacks `Secure` or `Path=/` or sets `Domain` (browsers reject all of these) | a cookie lacks `HttpOnly` or `SameSite` |
 | `cors` | the response reflects any `Origin`, or allows `Origin: null`, together with `Access-Control-Allow-Credentials: true` | it reflects any `Origin` without credentials, or sends `*` with credentials (browsers reject that combination) |
 
-Every `Set-Cookie` header is checked, including those sent by redirects on the way to the final page (a login, or `www.` to the bare domain), each judged by the scheme of the response that sent it. When a cookie is set more than once, its last version counts, as in a browser's cookie store, and a `Set-Cookie` that only deletes a cookie (`Max-Age=0` or a past `Expires`) is ignored. A missing `HttpOnly` is a warning because some cookies are meant to be read by JavaScript.
+Every `Set-Cookie` header is checked, including those sent by redirects on the way to the final page (a login, or `www.` to the bare domain), each judged by the scheme of the response that sent it. Cookies are told apart as a browser's cookie store tells them apart: by name, domain (the `Domain` attribute, or else the host that set the cookie) and path (the `Path` attribute, or else the directory of the URL that set it). A later `Set-Cookie` for the same cookie replaces the earlier one, and a `Set-Cookie` that only deletes a cookie (`Max-Age=0` or a past `Expires`) is ignored. A missing `HttpOnly` is a warning because some cookies are meant to be read by JavaScript.
 
 </details>
 
@@ -168,7 +168,7 @@ CAA is looked up from the host up to its top-level domain, as certificate author
 | Check | FAIL when | WARN when |
 |---|---|---|
 | `security-txt` | | `/.well-known/security.txt` is missing, not `text/plain`, lacks `Contact` or `Expires`, or has an invalid, expired, duplicate or more-than-a-year-away `Expires` (RFC 9116) |
-| `https-redirect` | the `http://` URL is served without a redirect, redirects to another `http://` URL, or redirects to something other than `https://` | |
+| `https-redirect` | the `http://` URL is served without a redirect, redirects to another `http://` URL, or redirects to something other than `https://` | plain HTTP answers with a response that cannot be read, so the redirect could not be checked |
 
 If nothing answers on plain HTTP at all, `https-redirect` passes, since nothing is served without TLS.
 
@@ -203,6 +203,7 @@ HTTP 200, generated 2026-10-10 15:50 UTC by web-posture-check 0.3.0
 | 0 | No FAIL (WARN findings may exist) |
 | 1 | At least one FAIL, including an untrusted certificate; with `--fail-on warn`, also any WARN |
 | 2 | A target could not be scanned (an invalid target, a DNS failure, a refused connection, a timeout, or nothing could be fetched even with `--insecure`), or `--output` or `--sarif` could not be written. The other targets and reports are still written |
+| 130 | Interrupted with Ctrl-C; the scans still running are abandoned |
 
 ## GitHub Action
 
@@ -281,7 +282,7 @@ For a fully reproducible workflow, pin the action to the release's commit SHA in
 - **TLS.** The certificate is read with the standard verifying TLS context. TLS 1.0 and 1.1 are each probed with a handshake allowed only that version; OpenSSL 3 will not offer them at its default security level, so the probe lowers it for that connection only, and if it still cannot offer one the result is a WARN, never a pass.
 - **DNS.** CAA is read for the host, climbing to parent domains as certificate authorities do (RFC 8659). SPF, DMARC and DKIM are read for the mail domain (`www.` removed); DMARC falls back to the organizational domain as receivers do; DKIM is looked up at `<selector>._domainkey.<domain>` for Google Workspace, Microsoft 365, Mailchimp, SendGrid, Cloudflare Email Routing and common defaults, or for `--dkim-selector`.
 - **Transport.** The same host and path are requested over `http://` (default port for an `https://` target, the target's own port for an `http://` one) to see whether it ends up on HTTPS.
-- **Concurrency and `--insecure`.** Targets are scanned in a thread pool. A target scanned with `--insecure` gets its own unverified TLS context passed down its call chain only, so it can never affect another target's requests.
+- **Concurrency and `--insecure`.** Targets are scanned in a thread pool. A target scanned with `--insecure` gets its own unverified TLS context passed down its call chain only, so it can never affect another target's requests. Its `Strict-Transport-Security` is judged as configured, with a note that browsers ignore it until the certificate is trusted.
 - **Output.** Findings quote what a site sent. Text and Markdown reports show control characters (terminal escape sequences, bidirectional overrides) as visible escapes such as `\x1b`, and Markdown puts the quoted text in code spans. JSON and SARIF escape it as JSON does.
 
 ## Development

@@ -9,8 +9,8 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 - SARIF 2.1.0 output for GitHub code scanning: `--format sarif`, and `--sarif FILE` to write a SARIF log next to the normal report from the same scan. FAIL is an error, WARN a warning; alerts keep one identity per check and URL across runs. `--sarif-location PATH` points every result at a repository file.
 - The GitHub Action always writes a SARIF log, anchored to the workflow file that runs it, and has a `sarif` output for `github/codeql-action/upload-sarif`. CI uploads it to code scanning and validates it against the OASIS SARIF schema.
 - The package is fully annotated, checked with mypy's strict options, and ships `py.typed` (PEP 561) for projects that import it. Tests are type-checked inside every function.
-- CI runs the tests on Python 3.9 to 3.15 on Linux and on Windows and macOS, with branch coverage (99% minimum, 100% today, the table in each job summary), and installs the built wheel into clean environments with and without the `[dns]` extra.
-- `tests/offline.py` runs the suite with only loopback reachable, and fails it if any test tries to reach the network, even when the code under test catches the error. CI and the release workflow run the tests this way.
+- CI runs the tests on Python 3.9 to 3.15 on Linux and on Windows and macOS, with branch coverage (99% minimum, 100% today, the table in each Linux job's summary), and installs the built wheel into clean environments with and without the `[dns]` extra.
+- `tests/offline.py` runs the suite with only loopback reachable, and fails it if any test tries to reach the network, even when the code under test catches the error, or if no test ran. CI and the release workflow run the tests this way.
 - CodeQL analysis of the Python code and the workflows.
 - Tests against real local servers: `tests/test_https_end_to_end.py` runs the CLI over HTTPS with a throwaway CA, and `tests/test_tls_live.py` runs the certificate fetch and the TLS 1.0/1.1 probes.
 
@@ -20,27 +20,38 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 - A target that could not be scanned is part of the JSON report, in input order, with `"status": null`, `"findings": []` and an `"error"`, and of the Markdown report, with an **Error:** line. With one target, `--json` used to print nothing at all.
 - With `--insecure`, a target that cannot be fetched even without certificate verification exits 2, like any target that could not be scanned (it exited 1).
 - The DNS checks are reported as skipped for an IP address or a single-label host such as `localhost`, which have no domain to look up.
-- `--sarif-location` without `--sarif` or `--format sarif` is a usage error instead of being ignored, and its path is written as a relative URI (`/` separators, spaces and `%` encoded).
+- `--sarif-location` must be a path inside the repository, and it needs `--sarif` or `--format sarif`; either mistake is a usage error. The path is written as a relative URI (`/` separators, spaces and `%` encoded).
+- With `--insecure`, a passing `hsts` finding notes that browsers ignore the header until the certificate is trusted (RFC 6797 section 8.1).
+- `https-redirect` warns when plain HTTP answers with a response that cannot be read; that crashed the run.
 - The report is written before the SARIF log, and both are always attempted.
 - The release workflow runs the test suite before it builds. Every action in the workflows is pinned to a commit SHA, no checkout keeps the job's token (`persist-credentials: false`), pull request runs cancel the run they replace, and Dependabot proposes a release only after it has been out for seven days.
-- For code that imports `webposture`: `runner.scan(target, ScanOptions)` returns `(result, exit code)`, and a result carries an `error` when the target could not be scanned; `checks.py` lists every check; `emailauth.lookup_txt` returns `([], reason)` on failure.
+- For code that imports `webposture` (0.x, so the module API may change):
+  - `runner.scan(target, ScanOptions)` and `runner.run_checks(url, fetched, ScanOptions)` take a `ScanOptions` instead of the argparse namespace. `scan` returns `(result, exit code)`, and a result carries an `error` when the target could not be scanned.
+  - `runner.normalise_target` raises `ValueError` for a target it cannot check.
+  - `fetch.fetch_headers` returns a `FetchResult`. Its headers are a `HeaderMap` that keeps every occurrence (`get` gives the first, `get_all` all of them), and its cookies are `SetCookie` entries with the URL that set them.
+  - `cookies.check_cookies(set_cookies, is_https)`: the first parameter was `set_cookie_values`, and it also takes `SetCookie` entries.
+  - `checks.py` lists every check; `runner.HEADER_CHECKS` is gone (`runner.ALL_CHECKS` and `CHECK_SUMMARIES` remain).
+  - `emailauth.lookup_txt` returns `([], reason)` on failure instead of `(None, reason)`.
 
 ### Fixed
 
 Checks that passed, or judged the wrong value, when a header was repeated, listed or unusual. Each now reads the header as browsers do:
 
-- `hsts`: only the first header counts (RFC 6797). `max-age=0`, which tells browsers to stop enforcing HTTPS, and a repeated directive, which makes browsers ignore the header, now fail. So does a header received over plain HTTP, where browsers ignore it.
-- `csp`: every header and every comma-separated policy is enforced, so a weakness counts only when every policy that restricts scripts has it. An empty policy fails, a policy without `script-src` or `default-src` warns (it passed), and `'strict-dynamic'` also turns off `'unsafe-inline'`.
-- `clickjacking`: a `frame-ancestors` that allows any site (`*`, a bare scheme such as `https:`, or `https://*`) fails, even with `X-Frame-Options: DENY`, which browsers then ignore (it passed). Repeated `X-Frame-Options` values follow the HTML standard.
+- `hsts`: only the first header counts (RFC 6797), and it is parsed as Chromium and Firefox parse it. `max-age=0`, which tells browsers to stop enforcing HTTPS, now fails, and so does a header browsers ignore: a repeated `max-age` or `includeSubDomains`, an `includeSubDomains` with a value (`includeSubDomains=true` passed), text outside the grammar, or a header received over plain HTTP.
+- `csp`: every header and every comma-separated policy is enforced, so a weakness counts when every policy that governs it has it, however each one writes it (`*`, `http:`, `https:` and `https://*` all allow any HTTPS host). Wildcard hosts such as `https://*` and `*:443` passed. `script-src-elem` and `script-src-attr` were ignored, so `script-src 'self'; script-src-elem * 'unsafe-inline'` passed; script elements, event handlers and `eval()` are now each judged by the directive that governs them. A malformed nonce such as `'nonce-'` or `'nonce-{{NONCE}}'` no longer switches off `'unsafe-inline'`, while `'strict-dynamic'` does. An empty policy fails, and a policy without `script-src` or `default-src` warns (it passed).
+- `clickjacking`: a `frame-ancestors` that allows any website (`*`, `https:`, or `https://*`) fails, even with `X-Frame-Options: DENY`, which browsers then ignore (it passed). Repeated `X-Frame-Options` values follow the HTML standard.
 - `referrer-policy`: the last recognised value of a list applies, so `unsafe-url, strict-origin` is judged as `strict-origin`. `no-referrer-when-downgrade` and unrecognised values warn.
-- `x-content-type-options`: the first value decides (Fetch standard). `permissions-policy`: an empty header warns. `information-leakage`: every `Server` header is checked. `cors`: repeated headers are combined, so `x, x` does not count as the probe origin.
-- `cookies`: cookies set by redirects on the way to the final page are checked too, each against the scheme of the response that set it, and the last version of a cookie counts. They were not checked at all.
-- `dmarc`: a subdomain that inherits its parent's record is judged by `sp=`, so `p=reject; sp=none` no longer passes for `mail.example.com`.
+- `x-content-type-options`: the first value decides (Fetch standard). `permissions-policy`: an empty header warns. `information-leakage`: every `Server` header is checked. `cors`: repeated headers are combined, so `x, x` does not count as the probe origin. `cross-origin-isolation` and `x-xss-protection` combine a repeated header too, so two copies are an invalid value, as in browsers.
+- Header values lose only tabs, spaces and line breaks at their ends, as in browsers. Other characters were stripped too, so `nosniff` followed by a no-break space passed although browsers ignore it. Cookie attributes likewise, so `Secure` followed by a no-break space is not `Secure`.
+- `cookies`: cookies set by redirects on the way to the final page are checked too, each against the scheme of the response that set it. They were not checked at all. Cookies are told apart as a browser's cookie store tells them apart (name, the domain or the host that set it, and the path or the directory of the URL that set it), and the last version of each counts. A `Max-Age` such as `+0` or `0_0`, which browsers ignore, no longer counts as deleting the cookie.
+- `dmarc`: a subdomain that inherits its parent's record is judged by `sp=`, so `p=reject; sp=none` no longer passes for `mail.example.com`, and a record with an invalid `sp=` counts as `p=none` (RFC 7489 section 6.6.3).
 - `caa`: the lookup climbs to the top-level domain, as certificate authorities do (RFC 8659).
 - `https-redirect`: a redirect to another `http://` URL or to a scheme other than `https://` is named as such.
 - A target with spaces, control characters, credentials, an invalid port or host name, or a scheme other than `http(s)` is that target's error (exit 2) instead of a crash or a request. So is a response that is not HTTP, which crashed the run, and a redirect loop, which was graded as if its last redirect were the page. Any unexpected exception while scanning one target is that target's error too; the other targets are still reported.
 - `--timeout` must be a number of seconds above 0: `0` made every request fail, and negative numbers, `nan` and `inf` crashed the run.
 - Ctrl-C exits at once with code 130 instead of waiting for running scans, and a closed pipe (`| head`) ends quietly instead of with a traceback.
+- On Python 3.9 and 3.10 a 308 redirect was not followed, so the redirect itself was graded and an http-to-https 308 failed `https-redirect`.
+- A `--targets-file` that is not UTF-8 is a usage error instead of a traceback, and a UTF-8 byte order mark no longer becomes part of the first target.
 - Error pages and failed redirects no longer leave their connection open until garbage collection.
 - A `--sarif` file that cannot be written no longer stops the report from being written.
 - A server whose certificate has no expiry date is reported as untrusted instead of crashing the certificate check.
@@ -49,7 +60,7 @@ Checks that passed, or judged the wrong value, when a header was repeated, liste
 ### Security
 
 - Terminal injection: a site could put escape sequences in a header (for example OSC 52, which sets the clipboard of whoever runs the scan, or sequences that clear or rewrite the screen) and the text report printed them as they were. Text output and error messages now show control characters and bidirectional overrides as visible escapes such as `\x1b`.
-- Markdown injection: a site's text could add links, images, HTML, @mentions and issue references to a report rendered in a job summary, issue or pull request. Backslash escapes are not enough on GitHub, so the text is now in code spans. The Action reads its grade only from the report's summary lines, so a site cannot add one.
+- Markdown injection: a site's text could add links, images, HTML, @mentions and issue references to a report rendered in a job summary, issue or pull request. Backslash escapes are not enough on GitHub, so the text is now in code spans. The Action reads its grade only from the report's summary lines, so a site cannot add one. In SARIF messages, where `[text](target)` is a link, brackets are escaped.
 - Only HTTP and HTTPS are ever requested. A redirect to `ftp://` made the tool connect to whatever host and port the site named; it is now refused, like a redirect to any other scheme. A target such as `file:///etc/hostname` was read from the local disk; a target with a scheme other than `http(s)` is now rejected.
 
 ## [0.3.0] - 2026-10-10
