@@ -136,12 +136,12 @@ class CookieEdgeCaseTest(unittest.TestCase):
         self.assertTrue(cookies.is_deletion({"max-age": "soon", "expires": past}, self.NOW))
         self.assertFalse(cookies.is_deletion({"max-age": "soon"}, self.NOW))
 
-    def test_max_age_must_be_an_optional_minus_and_digits(self):
-        # RFC 6265 section 5.2.2. Python's int() would accept "+0" and "0_0" and
-        # call the cookie deleted, hiding it from the check.
-        for value in ("+0", "0_0", " 0x0", ""):
+    def test_max_age_must_be_a_whole_number(self):
+        # Python's int() also accepts "0_0", which browsers ignore, so the cookie
+        # would wrongly count as deleted. A sign is fine: Chrome deletes on "+0".
+        for value in ("0_0", " 0x0", "1e3", ""):
             self.assertFalse(cookies.is_deletion({"max-age": value}, self.NOW), repr(value))
-        for value in ("0", "-1", "-0"):
+        for value in ("0", "-1", "-0", "+0"):
             self.assertTrue(cookies.is_deletion({"max-age": value}, self.NOW), value)
 
     def test_invalid_expires_is_not_a_deletion(self):

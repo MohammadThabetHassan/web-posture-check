@@ -10,6 +10,7 @@ the redirect chain, each with the URL that sent it.
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from collections.abc import Sequence
 from datetime import datetime, timezone
@@ -97,8 +98,8 @@ def is_deletion(attributes: dict[str, str], now: datetime) -> bool:
     browser discards the cookie, so there is nothing to protect.
     Max-Age takes precedence over Expires (RFC 6265, section 5.3).
     """
-    # RFC 6265 section 5.2.2: a Max-Age that is not an optional "-" and digits is ignored.
-    if re.fullmatch(r"-?[0-9]+", attributes.get("max-age", "")):
+    # A Max-Age that is not a whole number (optionally signed, as Chrome accepts "+0") is ignored.
+    if re.fullmatch(r"[+-]?[0-9]+", attributes.get("max-age", "")):
         return int(attributes["max-age"]) <= 0
     if "expires" in attributes:
         try:
@@ -119,21 +120,61 @@ def _default_path(url: str) -> str:
     return path[:path.rindex("/")]
 
 
-def cookie_key(name: str, attributes: dict[str, str], url: str = "") -> tuple[str, str, bool, str]:
+def _is_ip(host: str) -> bool:
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return True
+
+
+def _domain_match(host: str, domain: str) -> bool:
+    """RFC 6265 section 5.1.3: host is domain, or a name under it (never for an IP address)."""
+    return host == domain or (host.endswith("." + domain) and not _is_ip(host))
+
+
+def _path_match(path: str, cookie_path: str) -> bool:
+    """RFC 6265 section 5.1.4."""
+    return path == cookie_path or (path.startswith(cookie_path) and (cookie_path.endswith("/") or path[len(cookie_path)] == "/"))
+
+
+def cookie_key(name: str, attributes: dict[str, str], url: str = "") -> tuple[str, str, bool, str] | None:
     """How a browser's cookie store identifies a cookie: (name, domain, host-only, path).
 
-    The domain is the Domain attribute (lower case, without a leading dot), or
-    else the host that set the cookie, which makes it host-only. The path is the
-    Path attribute if it starts with "/", or else the default path of the URL
+    The domain is the Domain attribute (lower case, one leading dot removed),
+    or else the host that set the cookie, which makes it host-only. The path is
+    the Path attribute if it starts with "/", or else the default path of the URL
     that set it (RFC 6265 sections 5.2.3, 5.2.4 and 5.3; host-only is part of
     the identity in RFC 6265bis and in browsers). url is "" when unknown.
+
+    None when the browser rejects the cookie because its Domain does not cover
+    the host that set it (section 5.3, step 6). An IP address can set a Domain
+    of itself only, which browsers then treat as host-only.
     """
-    domain = attributes.get("domain", "").lower().lstrip(".")
+    domain = attributes.get("domain", "").lower()
+    domain = domain[1:] if domain.startswith(".") else domain
     host = (urlsplit(url).hostname or "") if url else ""
+    if domain and host:
+        if domain == host and _is_ip(host):
+            domain = ""
+        elif not _domain_match(host, domain):
+            return None
     path = attributes.get("path", "")
     if not path.startswith("/"):
         path = _default_path(url) if url else "/"
     return name, domain or host, not domain, path
+
+
+def _overwrites_secure(key: tuple[str, str, bool, str], jar: dict[tuple[str, str, bool, str], tuple[str, dict[str, str], bool, str | None]],
+                       now: datetime) -> bool:
+    """True when a cookie from plain HTTP would replace a live Secure cookie (RFC 6265bis, section 5.7)."""
+    name, domain, _, path = key
+    for (other_name, other_domain, _, other_path), (_, attributes, _, _) in jar.items():
+        if (other_name == name and "secure" in attributes and not is_deletion(attributes, now)
+                and (_domain_match(domain, other_domain) or _domain_match(other_domain, domain))
+                and _path_match(path, other_path)):
+            return True
+    return False
 
 
 def check_cookies(set_cookies: Sequence[str | SetCookie], is_https: bool, now: datetime | None = None) -> Finding:
@@ -145,6 +186,10 @@ def check_cookies(set_cookies: Sequence[str | SetCookie], is_https: bool, now: d
     (RFC 6265 section 5.3, step 11), so a cookie set on a redirect and deleted or
     re-set by the final page is judged by its last version, while a cookie of the
     same name set by another host or for another path is a cookie of its own.
+
+    A Set-Cookie the browser rejects changes nothing: a Domain that does not
+    cover the host that sent it, a Secure cookie sent over plain HTTP, or a
+    cookie from plain HTTP that would replace a Secure one (RFC 6265bis).
     """
     now = now or datetime.now(timezone.utc)
     jar: dict[tuple[str, str, bool, str], tuple[str, dict[str, str], bool, str | None]] = {}
@@ -155,6 +200,8 @@ def check_cookies(set_cookies: Sequence[str | SetCookie], is_https: bool, now: d
             value, url, https, via = item, "", is_https, None
         name, attributes = parse_set_cookie(value)
         key = cookie_key(name, attributes, url)
+        if key is None or (not https and ("secure" in attributes or _overwrites_secure(key, jar, now))):
+            continue
         jar.pop(key, None)  # keep the report in the order of the last write
         jar[key] = (name, attributes, https, via)
     live = [entry for entry in jar.values() if not is_deletion(entry[1], now)]
