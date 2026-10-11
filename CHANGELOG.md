@@ -6,6 +6,8 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 
 ### Added
 
+- SARIF 2.1.0 output for GitHub code scanning: `--format sarif`, and `--sarif FILE` to write a SARIF log next to the normal report from the same scan. FAIL is an error, WARN a warning; alerts keep one identity per check and URL across runs. `--sarif-location PATH` points every result at a repository file.
+- The GitHub Action always writes a SARIF log, anchored to the workflow file that runs it, and has a `sarif` output for `github/codeql-action/upload-sarif`. CI uploads it to code scanning and validates it against the OASIS SARIF schema.
 - mypy type checking in CI, of every function body including the tests.
 - Branch coverage in CI, with a 97% minimum (99% today) and the coverage table in each job summary.
 - CodeQL analysis of the Python code and the workflows.

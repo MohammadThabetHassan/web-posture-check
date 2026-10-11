@@ -39,7 +39,7 @@ Score: 55/100 (grade F)
 - **20 checks in one run**, covering the response, the TLS server and the domain's DNS: what a browser, a mail server and an attacker each see from outside. [All checks](#checks).
 - **No false passes.** When a check cannot decide (a DNS lookup failed, the local OpenSSL cannot offer TLS 1.0, a DKIM selector cannot be guessed), it says so as a WARN instead of passing.
 - **Grounded in the standards.** Rules follow the RFCs, the Fetch standard and OWASP guidance, and each finding explains why it matters.
-- **Built for CI.** Exit codes, `--fail-on warn`, JSON and Markdown reports, a score and grade, and a ready-made [GitHub Action](#github-action).
+- **Built for CI.** Exit codes, `--fail-on warn`, JSON, Markdown and SARIF reports, a score and grade, a ready-made [GitHub Action](#github-action), and findings in [GitHub code scanning](#github-code-scanning).
 - **Light.** The core has no third-party dependencies; DNS checks use the optional `[dns]` extra. Python 3.9 or newer.
 
 ## Contents
@@ -48,7 +48,7 @@ Score: 55/100 (grade F)
 - [Usage](#usage)
 - [Checks](#checks)
 - [Reports, score and exit codes](#reports-score-and-exit-codes)
-- [GitHub Action](#github-action)
+- [GitHub Action](#github-action) and [code scanning](#github-code-scanning)
 - [How it works](#how-it-works)
 - [Development](#development)
 - [Releases](#releases) · [Contributing and security](#contributing-and-security) · [Authors](#authors) · [License](#license)
@@ -68,6 +68,7 @@ Without the `[dns]` extra the DNS checks are reported as skipped, not failed. To
 web-posture-check example.com                                 # every check, text report
 web-posture-check https://example.com/login --json            # a specific page, JSON
 web-posture-check example.com --format markdown --output report.md
+web-posture-check example.com --sarif posture.sarif               # text report plus a SARIF log
 web-posture-check site-one.com site-two.com --targets-file clients.txt --jobs 8
 web-posture-check example.com --only tls-certificate,tls-protocols,caa
 web-posture-check example.com --skip spf,dmarc,dkim --fail-on warn
@@ -78,8 +79,10 @@ web-posture-check --list-checks
 |---|---|
 | `target ...` | Domains or URLs. A bare domain is fetched over `https://`. |
 | `--targets-file FILE` | More targets, one per line; blank lines and `#` comments are ignored. |
-| `--format text\|json\|markdown`, `--json` | Output format (default `text`). |
+| `--format text\|json\|markdown\|sarif`, `--json` | Output format (default `text`). |
 | `--output FILE` | Write the report to `FILE` as UTF-8 instead of printing it. |
+| `--sarif FILE` | Also write a SARIF 2.1.0 log to `FILE`, from the same scan. |
+| `--sarif-location PATH` | Repository file every SARIF result points to, such as the workflow that runs the scan. By default the path is made from the URL (`example.com/login`). |
 | `--only NAMES`, `--skip NAMES` | Comma-separated check names to run or leave out. A left-out check makes no requests. |
 | `--list-checks` | Print every check name with a short description. |
 | `--fail-on fail\|warn` | Exit 1 on any FAIL (default), or on any WARN or FAIL. |
@@ -168,7 +171,7 @@ If nothing answers on plain HTTP at all, `https-redirect` passes, since nothing 
 
 ## Reports, score and exit codes
 
-**Formats.** `text` (default) prints one line per finding. `json` gives `url`, `status`, `findings`, `score` and `grade` (plus `note` when checks were skipped or ran with `--insecure`); several targets give `{"results": [...]}`. `markdown` is a report for tickets, pull requests and emails, with failures first:
+**Formats.** `text` (default) prints one line per finding. `sarif` is a SARIF 2.1.0 log for [GitHub code scanning](#github-code-scanning) and other SARIF viewers. `json` gives `url`, `status`, `findings`, `score` and `grade` (plus `note` when checks were skipped or ran with `--insecure`); several targets give `{"results": [...]}`. `markdown` is a report for tickets, pull requests and emails, with failures first:
 
 ```markdown
 ## Web posture report: https://example.com
@@ -194,7 +197,7 @@ HTTP 200, generated 2026-10-10 15:50 UTC by web-posture-check 0.3.0
 |---|---|
 | 0 | No FAIL (WARN findings may exist) |
 | 1 | At least one FAIL, including an untrusted certificate; with `--fail-on warn`, also any WARN |
-| 2 | A target could not be reached (DNS failure, refused, timeout), or `--output` could not be written |
+| 2 | A target could not be reached (DNS failure, refused, timeout), or `--output` or `--sarif` could not be written |
 
 ## GitHub Action
 
@@ -228,7 +231,7 @@ jobs:
 | Input | Default | Meaning |
 |---|---|---|
 | `targets` | (required) | Domains or URLs, separated by spaces or new lines |
-| `args` | `""` | Extra options such as `--only tls-certificate,caa` or `--fail-on warn`. Do not pass `--format`, `--json` or `--output`; the action writes the Markdown report itself |
+| `args` | `""` | Extra options such as `--only tls-certificate,caa` or `--fail-on warn`. Do not pass `--format`, `--json`, `--output`, `--sarif` or `--sarif-location`; the action writes the Markdown report and the SARIF log itself |
 | `dns` | `"true"` | Install the `[dns]` extra for the CAA, SPF, DMARC and DKIM checks |
 | `python-version` | `"3.12"` | Python version to run with |
 
@@ -238,6 +241,32 @@ jobs:
 | `grade` | Worst grade (A–F) across the targets |
 | `exit-code` | The tool's exit code (see above) |
 | `report` | Path of the Markdown report file, e.g. to attach to an issue |
+| `sarif` | Path of the SARIF 2.1.0 log, for [code scanning](#github-code-scanning) |
+
+### GitHub code scanning
+
+Since v0.4.0: upload the `sarif` output and every FAIL and WARN becomes an alert in the repository's **Security** tab. Alerts open when a problem appears and close by themselves when a later scan no longer finds it.
+
+```yaml
+jobs:
+  posture:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - id: posture
+        uses: MohammadThabetHassan/web-posture-check@v0.4.0
+        with:
+          targets: example.com
+      - if: always() && steps.posture.outputs.sarif != ''
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: ${{ steps.posture.outputs.sarif }}
+          category: web-posture-check
+```
+
+FAIL becomes an error and WARN a warning; PASS and skipped checks are not uploaded. A website has no source line, so each alert points to the workflow file that ran the scan and names the URL in its message. An alert's identity is the check and the URL, so a detail that changes between runs (such as days until a certificate expires) updates the same alert instead of opening a new one. The Action's own CI uploads its SARIF to code scanning on every change, so the format is checked against GitHub itself, and validates it against the OASIS SARIF 2.1.0 schema.
 
 For a fully reproducible workflow, pin the action to the release's commit SHA instead of the tag. The SecuritySolution.tech website runs this action every day alongside its own posture script.
 
@@ -261,9 +290,9 @@ mypy                                                               # type check,
 | Module (`src/webposture/`) | Role |
 |---|---|
 | `cli.py` | Arguments, `--list-checks`, the loop over targets |
-| `runner.py` | Scanning one target: fetch, run the selected checks, exit code |
+| `runner.py` | The check list and summaries, and scanning one target: fetch, run the selected checks, exit code |
 | `fetch.py` | HTTP requests, redirects, retries and error messages |
-| `output.py`, `markdown.py` | Text, JSON and Markdown rendering |
+| `output.py`, `markdown.py`, `sarif.py` | Text, JSON, Markdown and SARIF rendering |
 | `headers.py`, `cookies.py`, `cors.py`, `tls.py`, `transport.py`, `caa.py`, `securitytxt.py`, `emailauth.py` | The checks |
 | `score.py`, `findings.py` | Score and grade, and the `Finding` type |
 

@@ -6,3 +6,10 @@ dist/
 .venv/
 venv/
 .pytest_cache/
+.coverage
+.coverage.*
+coverage.md
+coverage.xml
+htmlcov/
+.mypy_cache/
+.ruff_cache/

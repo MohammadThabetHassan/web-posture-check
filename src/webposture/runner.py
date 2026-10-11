@@ -24,6 +24,30 @@ ALL_CHECKS = [
     "security-txt", "spf", "dmarc", "dkim", "https-redirect",
 ]
 
+# One line per check, in report order: --list-checks and the SARIF rules.
+CHECK_SUMMARIES = {
+    "http-status": "the final response is not an error page (bot protection, 4xx, 5xx)",
+    "hsts": "Strict-Transport-Security max-age, includeSubDomains and preload",
+    "csp": "Content-Security-Policy is set and its script policy is not unsafe",
+    "x-content-type-options": "X-Content-Type-Options: nosniff",
+    "clickjacking": "CSP frame-ancestors or X-Frame-Options",
+    "referrer-policy": "Referrer-Policy is set and not unsafe-url",
+    "permissions-policy": "Permissions-Policy is set",
+    "cross-origin-isolation": "Cross-Origin-Opener, -Resource and -Embedder policies",
+    "x-xss-protection": "the legacy XSS auditor is not turned on",
+    "information-leakage": "no server version or stack headers",
+    "cookies": "Secure, HttpOnly, SameSite and __Host- / __Secure- prefixes",
+    "cors": "no credentialed access for any origin (probe request)",
+    "tls-certificate": "trusted and not close to expiry",
+    "tls-protocols": "TLS 1.0 and 1.1 are refused",
+    "caa": "a CAA record limits which CAs may issue",
+    "security-txt": "/.well-known/security.txt (RFC 9116)",
+    "spf": "a single SPF record that does not allow everyone",
+    "dmarc": "a DMARC policy that quarantines or rejects",
+    "dkim": "a DKIM key under common or given selectors",
+    "https-redirect": "plain HTTP redirects to HTTPS",
+}
+
 
 def normalise_target(target):
     if "://" not in target:

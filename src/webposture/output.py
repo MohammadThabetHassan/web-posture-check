@@ -1,9 +1,9 @@
-"""Rendering results as text, JSON or Markdown."""
+"""Rendering results as text, JSON, Markdown or SARIF."""
 
 import json
 from datetime import datetime, timezone
 
-from . import __version__, markdown, score
+from . import __version__, markdown, runner, sarif, score
 
 
 def to_json(result):
@@ -28,8 +28,18 @@ def to_text(result):
     return "\n".join(lines)
 
 
-def render(output_format, results, single):
-    """Return every result as one string. With one target it is a single object or report."""
+def to_sarif(results, errors=(), anchor=None):
+    log = sarif.render(results, runner.ALL_CHECKS, runner.CHECK_SUMMARIES, errors=errors, anchor=anchor)
+    return json.dumps(log, indent=2) + "\n"
+
+
+def render(output_format, results, single, errors=(), sarif_anchor=None):
+    """Return every result as one string. With one target it is a single object or report.
+
+    errors (targets that could not be scanned) and sarif_anchor are used by the SARIF format only.
+    """
+    if output_format == "sarif":
+        return to_sarif(results, errors, sarif_anchor)
     if output_format == "json":
         if single:
             return json.dumps(to_json(results[0]), indent=2) + "\n" if results else ""
