@@ -47,6 +47,7 @@ Score: 55/100 (grade F)
 - [Reports, score and exit codes](#reports-score-and-exit-codes)
 - [GitHub Action](#github-action)
 - [How it works](#how-it-works)
+- [Compared with other tools](#compared-with-other-tools) · [Compatibility](#compatibility)
 - [Development](#development)
 - [Releases](#releases) · [Contributing and security](#contributing-and-security) · [Authors](#authors) · [License](#license)
 
@@ -245,6 +246,34 @@ For a fully reproducible workflow, pin the action to the release's commit SHA in
 - **DNS.** CAA is read for the host, climbing to parent domains as certificate authorities do (RFC 8659). SPF, DMARC and DKIM are read for the mail domain (`www.` removed); DMARC falls back to the organizational domain as receivers do; DKIM is looked up at `<selector>._domainkey.<domain>` for Google Workspace, Microsoft 365, Mailchimp, SendGrid, Cloudflare Email Routing and common defaults, or for `--dkim-selector`.
 - **Transport.** The same host and path are requested over `http://` (default port for an `https://` target, the target's own port for an `http://` one) to see whether it ends up on HTTPS.
 - **Concurrency and `--insecure`.** Targets are scanned in a thread pool. A target scanned with `--insecure` gets its own unverified TLS context passed down its call chain only, so it can never affect another target's requests.
+
+## Compared with other tools
+
+web-posture-check does not replace the established tools below; it puts a broad, standards-based baseline of all three areas (web, TLS, email DNS) into one command that fits a pipeline. Pick by the question you are asking:
+
+| Tool | Best at | How you run it |
+|---|---|---|
+| **web-posture-check** | One baseline across response headers, cookies, CORS, certificate, TLS 1.0/1.1, CAA, security.txt, SPF, DMARC, DKIM and the HTTPS redirect, with a score, exit codes and SARIF | CLI and GitHub Action, any number of sites, no account |
+| [Mozilla HTTP Observatory](https://developer.mozilla.org/en-US/observatory) | Grading HTTP security headers, cookies and redirects, with detailed guidance | Website and API |
+| [testssl.sh](https://github.com/testssl/testssl.sh) | Deep TLS testing: every protocol and cipher, known TLS vulnerabilities, certificates, STARTTLS and services on any port | Bash script |
+| [internet.nl](https://internet.nl/) | Modern internet standards for websites and mail: IPv6, DNSSEC, HTTPS and headers, SPF, DKIM, DMARC, STARTTLS, DANE and RPKI | Website and batch API |
+| [securityheaders.com](https://securityheaders.com/) | A quick grade of a page's security headers | Website |
+
+A good pattern is to run web-posture-check on every change or on a schedule to catch regressions, and the specialist tools when you need depth in one area.
+
+**What web-posture-check does not do:** test ciphers or TLS vulnerabilities (use testssl.sh); check DNSSEC, IPv6, MTA-STS, DANE or mail-server STARTTLS (use internet.nl); crawl a site or test for vulnerabilities such as XSS or SQL injection (use a scanner such as OWASP ZAP). It looks at one URL per target from outside, as a visitor, a mail receiver or an attacker would.
+
+## Compatibility
+
+Version 0.x, but scripts and pipelines can rely on these. A change to any of them is listed in the [CHANGELOG](CHANGELOG.md) and only made in a new minor version (0.x to 0.y), never in a patch release:
+
+- **Exit codes** 0, 1 and 2 and what they mean.
+- **Check names** (`--list-checks`), which are also the SARIF rule IDs and the names `--only` and `--skip` take. A new check can be added in a minor version; it is announced in the CHANGELOG, since `--fail-on` may then fail on it.
+- **JSON fields**: `url`, `status`, `findings` (`check`, `status`, `detail`), `score`, `grade`, `note`, and `results` for several targets. New fields may be added.
+- **Statuses** `PASS`, `WARN` and `FAIL`, and that a skipped check starts its detail with `skipped:`.
+- **Action inputs and outputs**.
+
+The detail text, the text and Markdown layouts and the exact score of a site can change in any release: a check that becomes more accurate can change a result. Pin a version (`web-posture-check==0.3.0`, or the action at a release SHA) for fully repeatable results.
 
 ## Development
 

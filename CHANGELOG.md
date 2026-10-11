@@ -4,7 +4,10 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- README: how web-posture-check compares with Mozilla HTTP Observatory, testssl.sh, internet.nl and securityheaders.com, and what it does not do.
+- README: a compatibility promise for 0.x: exit codes, check names, JSON fields, statuses and the Action's inputs and outputs only change in a minor version, with a CHANGELOG entry.
 
 ## [0.3.0] - 2026-10-10
 
