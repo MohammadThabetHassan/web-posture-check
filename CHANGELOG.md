@@ -18,6 +18,9 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 - SARIF rules carry a `security-severity` and `precision`, so GitHub code scanning shows alerts as High, Medium or Low. The values are defaults in `checks.py`. A repository whose code scanning check fails only on High or higher alerts no longer fails it for the medium rules (`hsts`, `csp`, `cookies` and others); the Action step itself still fails on any FAIL.
 - `--deadline SECONDS` bounds a whole run: targets not scanned in time are reported as errors and the run ends, where `--timeout` limits only each network operation. Both reject values too large to wait for.
 - Tests against real local servers: `tests/test_https_end_to_end.py` runs the CLI over HTTPS with a throwaway CA, and `tests/test_tls_live.py` runs the certificate fetch and the TLS 1.0/1.1 probes.
+- README: how web-posture-check compares with Mozilla HTTP Observatory, testssl.sh, internet.nl and securityheaders.com, and what it does not do.
+- README: a compatibility promise for 0.x: exit codes, check names, JSON fields, statuses and the Action's inputs and outputs only change in a minor version, with a CHANGELOG entry.
+- `tests/test_contract.py` turns that promise into tests, so an accidental change to any of those fails CI.
 
 ### Changed
 
