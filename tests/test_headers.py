@@ -361,14 +361,38 @@ class HstsStandardTest(unittest.TestCase):
             self.assertEqual(f.status, FAIL, value)
             self.assertIn("is not valid", f.detail, value)
 
-    def test_an_empty_value_is_accepted(self):
-        # Chromium accepts "x=" and "includeSubDomains=" (no value), but not includeSubDomains="".
-        self.assertEqual(headers.check_hsts({"Strict-Transport-Security": "max-age=31536000; x="}).status, PASS)
-        f = headers.check_hsts({"Strict-Transport-Security": "max-age=31536000; includeSubDomains="})
-        self.assertEqual((f.status, f.detail), (PASS, "max-age=31536000; includeSubDomains"))
+    def test_an_empty_value_after_equals_makes_the_header_invalid(self):
+        # Checked in Chrome: "x=", "includeSubDomains=" and "preload=" make it ignore the header,
+        # while a quoted empty value (x="") is fine, except for includeSubDomains.
+        for value in ("max-age=31536000; x=", "max-age=31536000; x= ", "max-age=31536000; includeSubDomains=",
+                      "max-age=31536000; includeSubDomains; preload=", "max-age=; max-age=31536000"):
+            f = headers.check_hsts({"Strict-Transport-Security": value})
+            self.assertEqual(f.status, FAIL, value)
+        self.assertEqual(headers.check_hsts({"Strict-Transport-Security": 'max-age=31536000; x=""'}).status, PASS)
         f = headers.check_hsts({"Strict-Transport-Security": 'max-age=31536000; includeSubDomains=""'})
         self.assertEqual(f.status, FAIL)
         self.assertIn("includeSubDomains takes no value", f.detail)
+
+    def test_parsing_matches_chrome_on_every_case_checked_there(self):
+        # Each header was sent to a real Chrome over HTTPS; "honoured" means Chrome then
+        # upgraded a plain-HTTP request to the host (an independent review's harness).
+        honoured = ["max-age=31536000", "max-age=0031536000", 'max-age=31536000; x="it\'s"', "max-age=31536000; it's=1",
+                    "max-age=31536000; x='abc", "max-age=31536000; x='a;b'", "max-age=31536000; x=a'b",
+                    "max-age=31536000; don't", 'max-age=31536000; x="a\\"b"', 'max-age=31536000; x="a=b"',
+                    'max-age="31536000"', "max-age = 31536000 ; includeSubDomains", "max-age=31536000;;",
+                    ";max-age=31536000", 'max-age=31536000; x=""', "max-age=31536000;\tincludeSubDomains",
+                    "max-age=99999999999999999999"]
+        ignored = ["max-age=31536000; includeSubDomains=true", "max-age='31536000'", "max-age=31536000; x='a b'",
+                   "max-age=31536000; includeSubDomains=''", 'max-age=31536000; "x"', "max-age=31536000; x=",
+                   "max-age=31536000; includeSubDomains=", "max-age=31536000; x=a=b", "max-age=31536000; =x",
+                   "max-age=+31536000", "max-age=31536000; includeSubDomains; preload=",
+                   'max-age=31536000; includeSubDomains=""', "max-age=31536000; x= ", 'max-age=31536000; x="a"b',
+                   "max-age=31536000; includeSubDomains; includeSubDomains", "max-age=; max-age=31536000",
+                   "max-age=31536000; x=a, y=b", "max-age=31536000; ="]
+        for value in honoured:
+            self.assertNotEqual(headers.check_hsts({"Strict-Transport-Security": value}).status, FAIL, value)
+        for value in ignored:
+            self.assertEqual(headers.check_hsts({"Strict-Transport-Security": value}).status, FAIL, value)
 
     def test_a_malformed_max_age_or_include_subdomains_is_ignored_by_every_browser(self):
         for value in ("max-age=1 2", "max-age=31536000; includeSubDomains=true", "max-age=(1)"):
@@ -472,6 +496,13 @@ class HttpWhitespaceTest(unittest.TestCase):
         self.assertEqual(headers.check_x_xss_protection({"X-XSS-Protection": "1, 0"}).status, WARN)
         self.assertIn("not a valid value", headers.check_x_xss_protection({"X-XSS-Protection": "on"}).detail)
 
+    def test_corp_with_parameters_is_not_recognised(self):
+        # CORP is not a structured header: Chrome ignores "same-origin; x". COOP takes parameters.
+        f = headers.check_cross_origin_isolation({"Cross-Origin-Opener-Policy": 'same-origin; report-to="r"',
+                                                  "Cross-Origin-Resource-Policy": "same-origin; x"})
+        self.assertIn("Cross-Origin-Resource-Policy value 'same-origin; x' is not recognised", f.detail)
+        self.assertIn("COOP=same-origin, CORP=unset", f.detail)
+
     def test_cross_origin_policy_values_are_case_sensitive(self):
         # Chrome: Same-Origin / Require-Corp do not make the page cross-origin isolated.
         f = headers.check_cross_origin_isolation({"Cross-Origin-Opener-Policy": "Same-Origin",
@@ -505,6 +536,17 @@ class CspParsingTest(unittest.TestCase):
         self.assertEqual(headers.check_csp({"Content-Security-Policy": "script-src\t'self'\x0c'nonce-abc123'"}).status, PASS)
         f = headers.check_csp({"Content-Security-Policy": "default-src *; script-src 'self'\x0b'nonce-abc123'"})
         self.assertIn("default-src allows scripts from any host", f.detail)
+
+    def test_a_delete_character_drops_the_directive(self):
+        f = headers.check_csp({"Content-Security-Policy": "default-src *; script-src 'self'\x7f"})
+        self.assertIn("default-src allows scripts from any host", f.detail)
+
+    def test_every_comma_separates_policies_even_inside_quotes(self):
+        # Chrome splits on every comma, so the nonce below is in a second policy of its own,
+        # and 'unsafe-inline' still applies in the first one.
+        f = headers.check_csp({"Content-Security-Policy": "script-src 'unsafe-inline' \"a, 'nonce-abc'"})
+        self.assertEqual(f.status, WARN)
+        self.assertIn("'unsafe-inline'", f.detail)
 
     def test_a_dropped_frame_ancestors_protects_nothing(self):
         self.assertEqual(headers.check_framing({"Content-Security-Policy": "frame-ancestors 'none'\xa0"}).status, FAIL)

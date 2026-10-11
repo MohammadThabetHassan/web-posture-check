@@ -31,7 +31,7 @@ _NONCE_OR_HASH = re.compile(r"'(?:nonce|sha256|sha384|sha512)-[a-z0-9+/_-]+={0,2
 # (CSP3 section 2.3.1): https://*, *:443, *:*, http://*/js/, https://*.com.
 _ANY_HOST_SOURCE = re.compile(r"(?:(?P<scheme>[a-z][a-z0-9+.-]*)://)?\*(?:\.(?P<tld>[a-z0-9-]+))?(?::(?:[0-9]+|\*))?(?:/.*)?")
 
-# Special-use names nobody can register (RFC 2606, RFC 6761, RFC 6762, ICANN's .internal).
+# Special-use names that cannot be registered publicly (RFC 2606, RFC 6761, RFC 6762's .local, ICANN's .internal).
 _RESERVED_TLDS = frozenset({"localhost", "test", "invalid", "example", "local", "internal"})
 
 # For each part of script loading, the directives that govern it, most specific
@@ -65,12 +65,12 @@ _QUOTED_STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
 def _hsts_directives(value: str) -> dict[str, str | None] | str:
     """Directive name (lower case) -> value with quotes removed, or None for a bare directive.
 
-    Returns why browsers ignore the whole header instead, as Chromium's parser
-    (net/http/http_security_headers.cc) and RFC 6797 section 6.1 decide: a
-    directive name that is not a token, a value that is neither a token nor a
-    quoted string (an empty value is accepted), a repeated max-age or
-    includeSubDomains, or an includeSubDomains with a value. Other directives,
-    preload among them, may repeat and are otherwise ignored.
+    Returns why browsers ignore the whole header instead, as RFC 6797 section
+    6.1 says and Chrome does (checked against a real Chrome): a directive name
+    that is not a token, a value after "=" that is neither a token nor a quoted
+    string (so "x=" with nothing after it is invalid, while x="" is fine), a
+    repeated max-age or includeSubDomains, or an includeSubDomains with a value.
+    Other directives, preload among them, may repeat and are otherwise ignored.
     """
     directives: dict[str, str | None] = {}
     for part in split_list(value, ";"):
@@ -81,7 +81,7 @@ def _hsts_directives(value: str) -> dict[str, str | None] | str:
         if not _TOKEN.fullmatch(name):
             return f"'{name}' is not a valid directive"
         quoted = raw.startswith('"')
-        valid_value = _QUOTED_STRING.fullmatch(raw) if quoted else not raw or _TOKEN.fullmatch(raw)
+        valid_value = _QUOTED_STRING.fullmatch(raw) if quoted else not sep or _TOKEN.fullmatch(raw)
         if not valid_value:
             return f"the value of {name} is not valid"
         if quoted:
@@ -166,7 +166,7 @@ def _csp_policies(header_values: list[str]) -> list[dict[str, list[str]]]:
     """Parse Content-Security-Policy headers into policies, each a {directive: [sources]} dict.
 
     Every header is enforced, and one header can carry several policies separated
-    by commas (CSP3 section 2.2.3). Within a policy the first occurrence of a
+    by commas (CSP3 section 2.2.3; browsers split on every comma, quotes or not). Within a policy the first occurrence of a
     directive wins and later ones are ignored, and a directive with a character
     browsers do not accept is dropped, as in section 2.2.1. Directive names and
     source expressions are compared in lower case. Policies with no directives are
@@ -174,7 +174,7 @@ def _csp_policies(header_values: list[str]) -> list[dict[str, list[str]]]:
     """
     policies = []
     for header in header_values:
-        for serialized in split_list(header):
+        for serialized in header.split(","):
             directives: dict[str, list[str]] = {}
             for token in serialized.split(";"):
                 token = token.strip(_ASCII_WHITESPACE)
@@ -438,14 +438,21 @@ CORP_VALUES = ("same-site", "same-origin", "cross-origin")
 COEP_VALUES = ("unsafe-none", "require-corp", "credentialless")
 
 
-def _known_policy(hm: HeaderMap, name: str, allowed: tuple[str, ...]) -> tuple[str | None, str | None]:
+def _whole_value(value: str | None) -> str | None:
+    """A header's whole value without surrounding HTTP whitespace; None when absent or empty."""
+    return value.strip(HTTP_WHITESPACE) or None if value else None
+
+
+def _known_policy(hm: HeaderMap, name: str, allowed: tuple[str, ...], parameters: bool = True) -> tuple[str | None, str | None]:
     """Return (value, None) for a recognised value or None, or (None, raw) for one browsers ignore.
 
     Browsers combine a repeated header, so two copies ("same-origin, same-origin")
     are not a value they recognise either (the Fetch standard notes this for CORP).
+    parameters is False for a header whose whole value must be the keyword: CORP is
+    not a structured header, and Chrome ignores "same-origin; x".
     """
     combined = hm.combined(name)
-    value = _policy_token(combined)
+    value = _policy_token(combined) if parameters else _whole_value(combined)
     if value is None or value in allowed:
         return value, None
     return None, combined
@@ -459,7 +466,7 @@ def check_cross_origin_isolation(headers: HeaderSource) -> Finding:
     """
     hm = _headers(headers)
     coop, coop_bad = _known_policy(hm, "Cross-Origin-Opener-Policy", COOP_VALUES)
-    corp, corp_bad = _known_policy(hm, "Cross-Origin-Resource-Policy", CORP_VALUES)
+    corp, corp_bad = _known_policy(hm, "Cross-Origin-Resource-Policy", CORP_VALUES, parameters=False)
     coep, coep_bad = _known_policy(hm, "Cross-Origin-Embedder-Policy", COEP_VALUES)
     problems = [f"{name} value '{value}' is not recognised, so browsers ignore it"
                 for name, value in (("Cross-Origin-Opener-Policy", coop_bad),
