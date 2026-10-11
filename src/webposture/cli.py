@@ -14,7 +14,7 @@ from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from typing import NoReturn
 
-from . import __version__, checks, output, runner
+from . import __version__, checks, output, runner, sarif
 from .findings import ScanResult
 from .textsafe import printable
 
@@ -51,8 +51,11 @@ def positive_seconds(value: str) -> float:
 
 
 def read_targets_file(path: str) -> list[str]:
-    """One target per line; blank lines and lines starting with # are ignored."""
-    with open(path, encoding="utf-8") as handle:
+    """One target per line; blank lines and lines starting with # are ignored.
+
+    The file is UTF-8, with or without a byte order mark (as Windows editors save it).
+    """
+    with open(path, encoding="utf-8-sig") as handle:
         lines = [line.strip() for line in handle]
     return [line for line in lines if line and not line.startswith("#")]
 
@@ -177,6 +180,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.sarif_location and not (args.sarif or args.format == "sarif"):
         parser.error("--sarif-location only applies to SARIF output: add --sarif FILE or --format sarif")
+    if args.sarif_location and sarif.location_problem(args.sarif_location):
+        parser.error(f"--sarif-location {sarif.location_problem(args.sarif_location)}")
 
     if args.list_checks:
         width = max(len(check.name) for check in checks.CATALOG)
@@ -189,6 +194,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             targets += read_targets_file(args.targets_file)
         except OSError as err:
             parser.error(f"could not read --targets-file: {err}")
+        except UnicodeDecodeError as err:
+            parser.error(f"could not read --targets-file: it is not UTF-8 text ({err.reason} at byte {err.start})")
     if not targets:
         parser.error("give at least one target, or --targets-file")
 

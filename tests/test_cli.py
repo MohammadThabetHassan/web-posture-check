@@ -250,6 +250,26 @@ class MultipleTargetsTest(unittest.TestCase):
         self.assertEqual([r["url"] for r in json.loads(out)["results"]],
                          ["https://good.example/", "https://bad.example/", "https://good.example/"])
 
+    def test_targets_file_may_start_with_a_byte_order_mark(self):
+        # Windows editors often save UTF-8 with a BOM; it must not become part of the first target.
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "sites.txt")
+            with open(path, "w", encoding="utf-8-sig") as handle:
+                handle.write("good.example\n")
+            _, out = self._run("--targets-file", path, "--json")
+        self.assertEqual(json.loads(out)["url"], "https://good.example/")
+
+    def test_a_targets_file_that_is_not_utf8_is_a_usage_error(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "sites.txt")
+            with open(path, "wb") as handle:
+                handle.write(b"caf\xe9.example\n")
+            err = io.StringIO()
+            with mock.patch("sys.stderr", err), self.assertRaises(SystemExit) as ctx:
+                cli.main(["--targets-file", path])
+        self.assertEqual(ctx.exception.code, 2)
+        self.assertIn("could not read --targets-file: it is not UTF-8 text", err.getvalue())
+
     def test_json_keeps_every_target_in_input_order_with_its_error(self):
         code, out = self._run("good.example", "down.example", "exa mple.com", "bad.example", "--json")
         results = json.loads(out)["results"]

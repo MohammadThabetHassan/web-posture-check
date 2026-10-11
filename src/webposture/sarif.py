@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import posixpath
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 from urllib.parse import quote, urlsplit
@@ -63,6 +64,26 @@ def artifact_uri(url: str) -> str:
     return quote(host + path, safe="/%-._~!$&'()*+,;=@")
 
 
+def location_problem(path: str) -> str | None:
+    """Why path cannot be the repository file SARIF results point to, or None when it can."""
+    normal = posixpath.normpath(path.replace("\\", "/"))
+    # An absolute path, a Windows drive (C:) or a URI scheme (https:) is not a repository path.
+    if normal.startswith("/") or re.match(r"[A-Za-z][A-Za-z0-9+.-]*:", normal):
+        return "must be a path relative to the repository root, such as .github/workflows/scan.yml"
+    if normal in (".", "..") or normal.startswith("../"):
+        return "must name a file inside the repository"
+    return None
+
+
+def escape_text(text: str) -> str:
+    """Plain text for a SARIF message, where "[text](target)" would be a link (SARIF 2.1.0 section 3.11.6).
+
+    Findings quote the site, so its brackets and backslashes are escaped and
+    cannot form a link in the code scanning alert.
+    """
+    return text.replace("\\", "\\\\").replace("[", "\\[").replace("]", "\\]")
+
+
 def anchor_uri(path: str) -> str:
     """A repository file path as a relative URI: / separators, no ./ segments, percent-encoded.
 
@@ -101,14 +122,14 @@ def render(results: Sequence[ScanResult], checks: Sequence[str], summaries: Mapp
                 "ruleId": finding.check,
                 "ruleIndex": index[finding.check],
                 "level": LEVELS[finding.status],
-                "message": {"text": f"{finding.check}: {finding.detail} ({result['url']})"},
+                "message": {"text": escape_text(f"{finding.check}: {finding.detail} ({result['url']})")},
                 "locations": [_location(result["url"], anchor)],
                 "partialFingerprints": {"webPostureCheck/v1": _fingerprint(finding.check, result["url"])},
             })
     invocation: dict[str, Any] = {"executionSuccessful": not errors}
     if errors:
         invocation["toolExecutionNotifications"] = [
-            {"level": "error", "message": {"text": message}} for message in errors
+            {"level": "error", "message": {"text": escape_text(message)}} for message in errors
         ]
     return {
         "$schema": SCHEMA,

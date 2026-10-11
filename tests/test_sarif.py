@@ -49,6 +49,16 @@ class SarifRenderTest(unittest.TestCase):
         log = _render([_result("https://example.com/login", Finding("hsts", "FAIL", "missing"))])
         self.assertEqual(log["runs"][0]["results"][0]["message"]["text"], "hsts: missing (https://example.com/login)")
 
+    def test_site_text_cannot_form_a_link_in_a_message(self):
+        # In SARIF plain text, "[text](target)" is a link (section 3.11.6); the site's brackets are escaped.
+        log = _render([_result("https://example.com/", Finding("information-leakage", "WARN", "Server: [fix](https://evil.example) a\\b"))],
+                      errors=["could not fetch https://x/: [x](https://evil.example)"])
+        run = log["runs"][0]
+        self.assertEqual(run["results"][0]["message"]["text"],
+                         "information-leakage: Server: \\[fix\\](https://evil.example) a\\\\b (https://example.com/)")
+        self.assertEqual(run["invocations"][0]["toolExecutionNotifications"][0]["message"]["text"],
+                         "could not fetch https://x/: \\[x\\](https://evil.example)")
+
     def test_location_is_a_relative_path_never_an_https_uri(self):
         # Code scanning rejects a SARIF file whose locations use the https scheme.
         log = _render([_result("https://example.com/login/", Finding("hsts", "FAIL", "missing"))])
@@ -96,6 +106,12 @@ class ArtifactUriTest(unittest.TestCase):
 
     def test_query_and_fragment_are_dropped(self):
         self.assertEqual(sarif.artifact_uri("https://example.com/a?token=x#top"), "example.com/a")
+
+    def test_only_a_path_inside_the_repository_can_be_the_location(self):
+        for path in (".github/workflows/scan.yml", "./scan.yml", "docs/web scan.yml", "a/../b.yml"):
+            self.assertIsNone(sarif.location_problem(path), path)
+        for path in ("/etc/passwd", "C:\\work\\scan.yml", "https://example.com/x", "../x.yml", "a/../../x", ".", ""):
+            self.assertIsNotNone(sarif.location_problem(path), path)
 
     def test_anchor_path_becomes_a_relative_uri(self):
         self.assertEqual(sarif.anchor_uri(".github/workflows/scan.yml"), ".github/workflows/scan.yml")
@@ -171,6 +187,14 @@ class SarifCliTest(unittest.TestCase):
                 self.assertEqual(json.load(handle)["runs"][0]["results"][0]["ruleId"], "hsts")
         self.assertEqual(code, 2)
         self.assertIn("could not write --output", err.getvalue())
+
+    def test_a_sarif_location_outside_the_repository_is_a_usage_error(self):
+        for path in ("/etc/passwd", "../outside.yml"):
+            err = io.StringIO()
+            with mock.patch("sys.stderr", err), self.assertRaises(SystemExit) as ctx:
+                cli.main(["example.com", "--format", "sarif", "--sarif-location", path])
+            self.assertEqual(ctx.exception.code, 2, path)
+            self.assertIn("--sarif-location must", err.getvalue())
 
     def test_sarif_location_without_sarif_output_is_a_usage_error(self):
         err = io.StringIO()
