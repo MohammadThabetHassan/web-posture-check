@@ -46,6 +46,7 @@ class SarifRenderTest(unittest.TestCase):
         for rule in log["runs"][0]["tool"]["driver"]["rules"]:
             properties = rule["properties"]
             self.assertIn("security", properties["tags"])
+            self.assertEqual(properties["precision"], "high")
             self.assertTrue(0.0 <= float(properties["security-severity"]) <= 10.0, rule["id"])
             self.assertEqual(properties["security-severity"], f"{checks.SEVERITIES[rule['id']]:.1f}")
         self.assertNotIn("security-severity", _render([])["runs"][0]["tool"]["driver"]["rules"][0]["properties"])

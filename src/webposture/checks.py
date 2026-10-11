@@ -15,9 +15,9 @@ class Check(NamedTuple):
     name: str
     # One line, for --list-checks and the SARIF rule.
     summary: str
-    # How serious a problem found by this check is, 0.0 to 10.0, as GitHub code scanning
-    # reads it from a SARIF rule (security-severity): 9.0 and above is critical, 7.0 high,
-    # 4.0 medium, below that low. Defaults for the worst case of each check; tune them here.
+    # How serious a problem found by this check is, as GitHub code scanning reads it from a
+    # SARIF rule (security-severity): over 9.0 is critical, 7.0 to 8.9 high, 4.0 to 6.9
+    # medium, 0.1 to 3.9 low. Defaults for the worst case of each check; tune them here.
     severity: float
 
 

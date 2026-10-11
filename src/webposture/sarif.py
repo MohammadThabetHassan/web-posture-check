@@ -49,7 +49,8 @@ def _rule(name: str, summary: str, severity: float | None) -> dict[str, Any]:
         "defaultConfiguration": {"level": "warning"},
         # GitHub shows security-severity (a number as a string) as Critical, High, Medium or Low
         # for rules tagged "security".
-        "properties": {"tags": ["security", "web-posture"],
+        # precision: how often a result is right; these checks are deterministic.
+        "properties": {"tags": ["security", "web-posture"], "precision": "high",
                        **({"security-severity": f"{severity:.1f}"} if severity is not None else {})},
     }
 
