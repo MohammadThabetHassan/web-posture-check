@@ -648,5 +648,101 @@ class ActionOutputsTest(unittest.TestCase):
         self.assertEqual(max(g for g, _ in found), "F")
 
 
+
+class TargetValidationTest(unittest.TestCase):
+    def test_accepted_targets(self):
+        cases = {
+            "example.com": "https://example.com",
+            " example.com:8443 ": "https://example.com:8443",
+            "HTTP://example.com/x": "HTTP://example.com/x",
+            "https://[2001:db8::1]:8443/": "https://[2001:db8::1]:8443/",
+            "bücher.example": "https://bücher.example",
+        }
+        for target, url in cases.items():
+            self.assertEqual(runner.normalise_target(target), url, target)
+
+    def test_refused_targets_say_why(self):
+        cases = {
+            "": "empty",
+            "exa mple.com": "spaces or control characters",
+            "example.com\x1b[2J": "spaces or control characters",
+            "ftp://example.com/": "only http:// and https://",
+            "file:///etc/passwd": "only http:// and https://",
+            "https://": "no host name",
+            "https://user:secret@example.com/": "credentials",
+            "example.com:abc": "port",
+            "example.com:99999": "port",
+            "https://[::1": "Invalid IPv6 URL",
+            "a" * 64 + ".example": "not a valid host name",
+        }
+        for target, reason in cases.items():
+            with self.assertRaises(ValueError, msg=target) as caught:
+                runner.normalise_target(target)
+            self.assertIn(reason, str(caught.exception), target)
+
+
+class RobustnessTest(unittest.TestCase):
+    """One bad target, option or broken pipe never ends the run with a traceback."""
+
+    GOOD: tuple = ("https://good.example/", {"Strict-Transport-Security": "max-age=31536000"}, [], 200)
+
+    def test_bad_targets_are_errors_and_good_targets_are_still_reported(self):
+        out, err = io.StringIO(), io.StringIO()
+        hostile = ["example.com:abc", "https://[::1", "ftp://example.com/", "exa mple.com", "https://user:pw@example.com"]
+        with mock.patch.object(fetch, "fetch_headers", return_value=self.GOOD), \
+                redirect_stdout(out), mock.patch("sys.stderr", err):
+            code = cli.main([*hostile, "good.example", "--only", "hsts", "--json"])
+        self.assertEqual(code, 2)
+        self.assertNotIn("Traceback", err.getvalue())
+        self.assertEqual(err.getvalue().count("error: invalid target"), len(hostile))
+        results = json.loads(out.getvalue())["results"]
+        self.assertIn("https://good.example/", [r["url"] for r in results])
+
+    def test_an_unexpected_exception_is_one_targets_error(self):
+        with mock.patch.object(runner, "scan", side_effect=RuntimeError("boom")):
+            result, code, error = cli.scan_safely("example.com", None)
+        self.assertEqual((result, code), (None, 2))
+        self.assertIn("unexpected error while scanning 'example.com': RuntimeError: boom", error)
+        self.assertIn("issues", error)
+
+    def test_timeout_must_be_a_positive_finite_number(self):
+        for value in ("0", "-1", "nan", "inf", "abc"):
+            with self.assertRaises(SystemExit, msg=value), mock.patch("sys.stderr", io.StringIO()):
+                cli.main(["example.com", "--timeout", value])
+        self.assertEqual(cli.build_parser().parse_args(["x", "--timeout", "2.5"]).timeout, 2.5)
+
+    def test_ctrl_c_exits_130_without_waiting(self):
+        err = io.StringIO()
+        with mock.patch.object(runner, "scan", side_effect=KeyboardInterrupt), \
+                mock.patch.object(cli, "exit_now", side_effect=SystemExit) as exit_now, \
+                mock.patch("sys.stderr", err), self.assertRaises(SystemExit):
+            cli.main(["example.com"])
+        exit_now.assert_called_once_with(130)
+        self.assertIn("interrupted", err.getvalue())
+
+    def test_exit_now_flushes_and_leaves_with_the_code(self):
+        with mock.patch.object(cli.os, "_exit") as leave:
+            cli.exit_now(130)
+        leave.assert_called_once_with(130)
+
+    def test_a_closed_pipe_is_not_a_traceback(self):
+        read_end, write_end = os.pipe()
+        self.addCleanup(os.close, read_end)
+        self.addCleanup(os.close, write_end)
+
+        class ClosedPipe:
+            def write(self, text):
+                raise BrokenPipeError
+
+            def flush(self):
+                pass
+
+            def fileno(self):
+                return write_end
+
+        with mock.patch.object(fetch, "fetch_headers", return_value=self.GOOD), mock.patch("sys.stdout", ClosedPipe()):
+            code = cli.main(["good.example", "--only", "hsts"])
+        self.assertEqual(code, 0)
+
 if __name__ == "__main__":
     unittest.main()

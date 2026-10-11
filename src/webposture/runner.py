@@ -51,9 +51,34 @@ CHECK_SUMMARIES = {
 
 
 def normalise_target(target):
-    if "://" not in target:
-        target = "https://" + target
-    return target
+    """Turn a target into the URL to fetch, or raise ValueError saying why it cannot be checked.
+
+    A bare domain or host:port is fetched over https://. Only http:// and https://
+    URLs with a valid host name and port are accepted; a URL with credentials in
+    it is refused, so they never end up in a request log or a report.
+    """
+    target = target.strip()
+    if not target:
+        raise ValueError("it is empty")
+    if any(ord(char) < 0x21 or ord(char) == 0x7F for char in target):
+        raise ValueError("it contains spaces or control characters")
+    url = target if "://" in target else "https://" + target
+    parts = urlsplit(url)  # raises ValueError for a malformed IPv6 literal
+    if parts.scheme.lower() not in ("http", "https"):
+        raise ValueError("only http:// and https:// URLs can be checked")
+    if not parts.hostname:
+        raise ValueError("it has no host name")
+    if "@" in parts.netloc:
+        raise ValueError("credentials in the URL are not supported")
+    try:
+        parts.port  # noqa: B018 -- reading it validates the port
+    except ValueError:
+        raise ValueError("its port is not a number from 0 to 65535") from None
+    try:
+        parts.hostname.encode("idna")
+    except UnicodeError:
+        raise ValueError(f"{parts.hostname} is not a valid host name") from None
+    return url
 
 
 def probe_cors(url, timeout, context=None):
@@ -174,7 +199,10 @@ def scan(target, args):
     returned rather than printed, so the caller can print the errors of
     targets scanned in parallel in a stable order.
     """
-    url = normalise_target(target)
+    try:
+        url = normalise_target(target)
+    except ValueError as err:
+        return None, 2, f"invalid target {target!r}: {err}"
     try:
         fetched = fetch.fetch_with_retries(url, args.timeout, args.retries)
     except fetch.FETCH_ERRORS as err:

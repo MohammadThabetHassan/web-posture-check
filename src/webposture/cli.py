@@ -5,6 +5,8 @@ and output (text, JSON and Markdown).
 """
 
 import argparse
+import math
+import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
@@ -26,6 +28,20 @@ def parse_check_names(value):
 
 # Kept here too for callers that used cli.CHECK_SUMMARIES.
 CHECK_SUMMARIES = runner.CHECK_SUMMARIES
+
+
+ISSUES_URL = "https://github.com/MohammadThabetHassan/web-posture-check/issues"
+
+
+def positive_seconds(value):
+    """argparse type for --timeout: a finite number of seconds above zero."""
+    try:
+        seconds = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{value!r} is not a number of seconds") from None
+    if not math.isfinite(seconds) or seconds <= 0:
+        raise argparse.ArgumentTypeError(f"{value!r} must be a number of seconds greater than 0")
+    return seconds
 
 
 def read_targets_file(path):
@@ -59,7 +75,8 @@ def build_parser():
                         help="repository file every SARIF result points to, e.g. the workflow that runs the scan "
                              "(default: a path made from the URL, such as example.com/login)")
     parser.add_argument("--list-checks", action="store_true", help="print every check name with a short description and exit")
-    parser.add_argument("--timeout", type=float, default=10.0, help="request timeout in seconds (default 10)")
+    parser.add_argument("--timeout", type=positive_seconds, default=10.0, metavar="SECONDS",
+                        help="request timeout in seconds, above 0 (default 10)")
     parser.add_argument("--insecure", action="store_true",
                         help="if a target's certificate is not trusted, still run the other checks without verification "
                              "(the certificate is reported as FAIL)")
@@ -92,6 +109,37 @@ def write_file(path, text, option):
     return True
 
 
+def scan_safely(target, args):
+    """runner.scan, but a bug while scanning one target becomes that target's error, exit code 2.
+
+    Without this, an unexpected exception in one thread would abort every other
+    target's report and print a traceback.
+    """
+    try:
+        return runner.scan(target, args)
+    except Exception as err:
+        return None, 2, f"unexpected error while scanning {target!r}: {type(err).__name__}: {err} (please report it at {ISSUES_URL})"
+
+
+def write_stdout(text):
+    """Print the report; if the reader has gone (e.g. piped into head), stop quietly instead of a traceback."""
+    try:
+        sys.stdout.write(text)
+        sys.stdout.flush()
+    except BrokenPipeError:
+        # Point stdout at devnull so the interpreter's own flush at exit is quiet too.
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        os.close(devnull)
+
+
+def exit_now(code):
+    """Leave immediately, without waiting for worker threads that cannot be interrupted."""
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(code)
+
+
 def main(argv=None):
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -111,8 +159,16 @@ def main(argv=None):
         parser.error("give at least one target, or --targets-file")
 
     # map() returns the outcomes in input order, however the scans finish.
-    with ThreadPoolExecutor(max_workers=min(args.jobs, len(targets))) as pool:
-        outcomes = list(pool.map(lambda target: runner.scan(target, args), targets))
+    pool = ThreadPoolExecutor(max_workers=min(args.jobs, len(targets)))
+    try:
+        outcomes = list(pool.map(lambda target: scan_safely(target, args), targets))
+    except KeyboardInterrupt:
+        # Running scans cannot be stopped, and waiting for them could take
+        # minutes, so leave at once with the conventional code for Ctrl-C.
+        pool.shutdown(wait=False, cancel_futures=True)
+        print("interrupted", file=sys.stderr)
+        exit_now(130)
+    pool.shutdown()
     results, codes, errors = [], [], []
     for result, code, error in outcomes:
         codes.append(code)
@@ -128,7 +184,7 @@ def main(argv=None):
         if not write_file(args.output, text, "--output"):
             return 2
     else:
-        sys.stdout.write(text)
+        write_stdout(text)
     # The worst outcome wins: 2 (a target could not be reached) over 1 (a FAIL) over 0.
     return max(codes)
 
