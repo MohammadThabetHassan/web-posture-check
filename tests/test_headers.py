@@ -119,12 +119,12 @@ class HeaderChecksTest(unittest.TestCase):
     def test_csp_wildcard_script_source_warns(self):
         f = headers.check_csp({"Content-Security-Policy": "script-src 'self' *"})
         self.assertEqual(f.status, WARN)
-        self.assertIn("allows scripts from *", f.detail)
+        self.assertIn("script-src allows scripts from any host (*)", f.detail)
 
     def test_csp_scheme_only_script_sources_warn(self):
         f = headers.check_csp({"Content-Security-Policy": "default-src 'self' https: data:"})
         self.assertEqual(f.status, WARN)
-        self.assertIn("default-src allows scripts from https:, data:", f.detail)
+        self.assertIn("default-src allows scripts from any HTTPS host and data: URLs (https:, data:)", f.detail)
 
     def test_csp_specific_hosts_pass(self):
         f = headers.check_csp({"Content-Security-Policy": "script-src 'self' https://cdn.example.com *.example.org"})
@@ -390,6 +390,92 @@ class CspStandardTest(unittest.TestCase):
         self.assertEqual(f.status, PASS)
 
 
+class CspScriptModelTest(unittest.TestCase):
+    """What a policy lets scripts do, as browsers decide it (CSP3 sections 4.4, 6.7.2 and 6.7.3)."""
+
+    def _csp(self, *values):
+        return headers.check_csp(HeaderMap([("Content-Security-Policy", value) for value in values]))
+
+    def test_broad_sources_count_whatever_their_spelling(self):
+        # A script must pass every policy. '*' and 'https:' are spelled differently,
+        # but both allow any HTTPS host, so together they still do.
+        cases = [
+            (("default-src * 'unsafe-inline' 'unsafe-eval' data: blob:", "script-src 'self' https:"), "any HTTPS host"),
+            (("script-src *", "script-src https:"), "any HTTPS host"),
+            (("script-src http:", "script-src https:"), "any HTTPS host"),
+            (("script-src *", "script-src http:"), "any host"),
+        ]
+        for values, expected in cases:
+            f = self._csp(*values)
+            self.assertEqual(f.status, WARN, values)
+            self.assertIn(f"scripts from {expected} in all 2 policies", f.detail, values)
+        f = self._csp(*cases[0][0])
+        self.assertIn("default-src and script-src allow scripts from any HTTPS host in all 2 policies (default-src *; script-src https:)",
+                      f.detail)
+
+    def test_a_policy_with_only_specific_hosts_removes_the_broad_reach(self):
+        self.assertEqual(self._csp("script-src *", "script-src https://cdn.example.com").status, PASS)
+
+    def test_wildcard_host_sources_allow_any_host(self):
+        for source in ("https://*", "http://*", "*:*", "https://*:443", "*:8443", "https://*/js/"):
+            f = self._csp(f"script-src 'self' {source}")
+            self.assertEqual(f.status, WARN, source)
+            self.assertIn("allows scripts from any", f.detail, source)
+            self.assertIn(f"({source})", f.detail, source)
+
+    def test_data_urls_alone_are_named(self):
+        f = self._csp("script-src 'self' data:")
+        self.assertEqual(f.status, WARN)
+        self.assertIn("script-src allows scripts from data: URLs (data:)", f.detail)
+
+    def test_subdomain_wildcards_and_non_web_schemes_are_not_any_host(self):
+        for source in ("*.example.com", "https://*.example.com", "blob:", "wss://*", "chrome-extension:"):
+            self.assertEqual(self._csp(f"script-src 'self' {source}").status, PASS, source)
+
+    def test_only_a_well_formed_nonce_or_hash_switches_off_unsafe_inline(self):
+        # A nonce or hash must match the grammar; an empty one or an unfilled
+        # template placeholder is not one, so 'unsafe-inline' still applies.
+        for source in ("'nonce-'", "'nonce-{{NONCE}}'", "'sha256-'", "'nonce-<%=nonce%>'"):
+            f = self._csp(f"script-src 'self' 'unsafe-inline' {source}")
+            self.assertEqual(f.status, WARN, source)
+            self.assertIn("'unsafe-inline'", f.detail, source)
+        for source in ("'nonce-abc123'", "'nonce-a_b-c'", "'sha384-AbC+/d=='", "'NONCE-Xy9='"):
+            self.assertEqual(self._csp(f"script-src 'self' 'unsafe-inline' {source}").status, PASS, source)
+
+    def test_script_src_elem_governs_script_elements(self):
+        f = self._csp("script-src 'self'; script-src-elem * 'unsafe-inline'")
+        self.assertEqual(f.status, WARN)
+        self.assertIn("script-src-elem allows 'unsafe-inline' without a nonce or hash", f.detail)
+        self.assertIn("script-src-elem allows scripts from any host (*)", f.detail)
+
+    def test_script_src_attr_governs_event_handlers(self):
+        f = self._csp("default-src 'self'; script-src-attr 'unsafe-inline'")
+        self.assertEqual(f.status, WARN)
+        self.assertIn("script-src-attr allows 'unsafe-inline'", f.detail)
+
+    def test_script_src_elem_alone_leaves_event_handlers_and_eval_unrestricted(self):
+        f = self._csp("script-src-elem 'self'")
+        self.assertEqual(f.status, WARN)
+        self.assertIn("nothing restricts inline event handlers", f.detail)
+        self.assertIn("nothing restricts eval()", f.detail)
+
+    def test_handlers_inherit_script_src_when_elements_have_their_own_directive(self):
+        f = self._csp("script-src 'self' 'unsafe-inline'; script-src-elem 'self'")
+        self.assertEqual(f.status, WARN)
+        self.assertIn("script-src allows 'unsafe-inline'", f.detail)
+        self.assertNotIn("script-src-elem allows", f.detail)
+
+    def test_one_message_when_elements_and_handlers_share_a_directive(self):
+        f = self._csp("script-src 'unsafe-inline'")
+        self.assertEqual(f.detail.count("'unsafe-inline'"), 1)
+
+    def test_strict_policies_pass(self):
+        for value in ("script-src 'strict-dynamic' 'nonce-abc123' https: 'unsafe-inline'",
+                      "script-src 'self'; script-src-elem 'self' https://cdn.example.com; script-src-attr 'none'",
+                      "default-src 'none'; script-src 'sha256-AbCd='"):
+            self.assertEqual(self._csp(value).status, PASS, value)
+
+
 class FramingStandardTest(unittest.TestCase):
     """The HTML standard's X-Frame-Options processing model, and CSP frame-ancestors."""
 
@@ -400,7 +486,7 @@ class FramingStandardTest(unittest.TestCase):
             self.assertIn("allows any site", f.detail)
 
     def test_restrictive_frame_ancestors_pass(self):
-        for value in ("'none'", "'self'", "https://partner.example", "*.example.com", ""):
+        for value in ("'none'", "'self'", "https://partner.example", "*.example.com", "", "'self' chrome-extension:"):
             f = headers.check_framing({"Content-Security-Policy": f"frame-ancestors {value}"})
             self.assertEqual(f.status, PASS, value)
         self.assertIn("'none'", headers.check_framing({"Content-Security-Policy": "frame-ancestors"}).detail)

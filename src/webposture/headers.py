@@ -21,13 +21,23 @@ from .headermap import HeaderMap, HeaderSource
 HSTS_MIN_MAX_AGE = 15552000
 HSTS_PRELOAD_MIN_MAX_AGE = 31536000
 
-# Script sources that allow loading code from any host (or from data: URLs),
-# which lets an attacker who can inject a <script src> tag run their own code.
-BROAD_SCRIPT_SOURCES = ("*", "https:", "http:", "data:")
+# A nonce-source or hash-source (CSP3 section 2.3.1), matched on a lower-cased
+# source list. One that does not match the grammar, such as 'nonce-' or an
+# unfilled template placeholder, is not a nonce, so it switches nothing off.
+_NONCE_OR_HASH = re.compile(r"'(?:nonce|sha256|sha384|sha512)-[a-z0-9+/_-]+={0,2}'")
 
-# Source expressions that switch off 'unsafe-inline' for scripts (CSP3 section
-# 6.7.3.3, "Does a source list allow all inline behavior for type?").
-_NONCE_OR_HASH = ("'nonce-", "'sha256-", "'sha384-", "'sha512-")
+# A host-source whose host is "*", with any scheme, port and path (CSP3 section
+# 2.3.1): https://*, *:443, *:*, http://*/js/. It matches every host.
+_ANY_HOST_SOURCE = re.compile(r"(?:(?P<scheme>[a-z][a-z0-9+.-]*)://)?\*(?::(?:[0-9]+|\*))?(?:/.*)?")
+
+# For each part of script loading, the directives that govern it, most specific
+# first: the first one a policy has is the one that applies (CSP3 section 6.8.4,
+# and section 4.4 for eval).
+_SCRIPT_DIRECTIVES = {
+    "elements": ("script-src-elem", "script-src", "default-src"),
+    "handlers": ("script-src-attr", "script-src", "default-src"),
+    "eval": ("script-src", "default-src"),
+}
 
 # The values of Referrer-Policy (Referrer Policy, section 3).
 REFERRER_POLICIES = (
@@ -131,26 +141,105 @@ def _csp_policies(header_values: list[str]) -> list[dict[str, list[str]]]:
     return policies
 
 
-def _script_directive(policy: dict[str, list[str]]) -> tuple[str, list[str]] | None:
-    """The directive that governs scripts in one policy: script-src, else default-src, else None."""
-    for name in ("script-src", "default-src"):
-        if name in policy:
-            return name, policy[name]
-    return None
+def _reach(sources: list[str]) -> set[str]:
+    """Where a source list lets anything be loaded from any host: "http" and "https" for
+    any web host over that scheme, "data" for data: URLs.
+
+    * and http: also match https (CSP3 sections 6.7.2.6 and 6.7.2.8), so the
+    spelling does not matter: *, http:, https:, https://* and *:443 all let
+    an attacker load code from a host of their own.
+    """
+    reach: set[str] = set()
+    for source in sources:
+        if source in ("*", "http:"):
+            reach |= {"http", "https"}
+        elif source in ("https:", "data:"):
+            reach.add(source[:-1])
+        else:
+            match = _ANY_HOST_SOURCE.fullmatch(source)
+            if match and match["scheme"] in (None, "http"):
+                reach |= {"http", "https"}
+            elif match and match["scheme"] == "https":
+                reach.add("https")
+    return reach
 
 
-def _script_weaknesses(sources: list[str]) -> list[str]:
-    """The unsafe things a script source list allows: 'unsafe-inline', 'unsafe-eval' and broad sources."""
-    weak = []
-    # A nonce, a hash or 'strict-dynamic' makes browsers ignore 'unsafe-inline' (CSP3 section 6.7.3.3).
-    if "'unsafe-inline'" in sources and not any(s.startswith(_NONCE_OR_HASH) or s == "'strict-dynamic'" for s in sources):
-        weak.append("'unsafe-inline'")
-    if "'unsafe-eval'" in sources:
-        weak.append("'unsafe-eval'")
-    # With 'strict-dynamic', CSP Level 3 browsers ignore host and scheme sources.
-    if "'strict-dynamic'" not in sources:
-        weak += [s for s in sources if s in BROAD_SCRIPT_SOURCES]
-    return weak
+def _script_reach(sources: list[str]) -> set[str]:
+    """_reach for scripts: with 'strict-dynamic', browsers ignore host and scheme sources."""
+    return set() if "'strict-dynamic'" in sources else _reach(sources)
+
+
+def _allows_inline(sources: list[str]) -> bool:
+    """CSP3 section 6.7.3.3: 'unsafe-inline' applies unless a nonce, a hash or 'strict-dynamic' is present."""
+    if any(source == "'strict-dynamic'" or _NONCE_OR_HASH.fullmatch(source) for source in sources):
+        return False
+    return "'unsafe-inline'" in sources
+
+
+def _describe_reach(reach: set[str]) -> str:
+    parts = []
+    if {"http", "https"} <= reach:
+        parts.append("any host")
+    elif "https" in reach:
+        parts.append("any HTTPS host")
+    if "data" in reach:
+        parts.append("data: URLs")
+    return " and ".join(parts)
+
+
+def _governing(policies: list[dict[str, list[str]]], part: str) -> list[tuple[str, list[str]]]:
+    """(directive, sources) for each policy that governs this part of script loading."""
+    found = []
+    for policy in policies:
+        name = next((name for name in _SCRIPT_DIRECTIVES[part] if name in policy), None)
+        if name is not None:
+            found.append((name, policy[name]))
+    return found
+
+
+def _subject(governing: list[tuple[str, list[str]]]) -> str:
+    """'script-src allows', or with several policies 'default-src and script-src allow ... in all 2 policies'."""
+    names = list(dict.fromkeys(name for name, _ in governing))
+    return f"{' and '.join(names)} {'allows' if len(names) == 1 else 'allow'}"
+
+
+def _scope(governing: list[tuple[str, list[str]]]) -> str:
+    return f" in all {len(governing)} policies" if len(governing) > 1 else ""
+
+
+def _script_problems(policies: list[dict[str, list[str]]]) -> list[str]:
+    """What the policies let scripts do that they should not, as sentences.
+
+    Every policy is enforced, so a script runs only if every policy that governs
+    it allows it: a weakness counts when all of those policies have it, whatever
+    the spelling (CSP3 section 2.2.2). A policy that does not govern something
+    does not restrict it.
+    """
+    problems: list[str] = []
+
+    def add(problem: str) -> None:
+        if problem not in problems:
+            problems.append(problem)
+
+    for part in ("elements", "handlers"):
+        governing = _governing(policies, part)
+        if governing and all(_allows_inline(sources) for _, sources in governing):
+            add(f"{_subject(governing)} 'unsafe-inline' without a nonce or hash{_scope(governing)}")
+    elements = _governing(policies, "elements")
+    shared = set.intersection(*(_script_reach(sources) for _, sources in elements)) if elements else set()
+    if shared:
+        # The sources to remove, per policy.
+        per_policy = [(name, [source for source in sources if _reach([source]) & shared]) for name, sources in elements]
+        shown = ", ".join(per_policy[0][1]) if len(elements) == 1 else "; ".join(f"{name} {' '.join(tokens)}" for name, tokens in per_policy)
+        add(f"{_subject(elements)} scripts from {_describe_reach(shared)}{_scope(elements)} ({shown})")
+    if not _governing(policies, "handlers"):
+        add("nothing restricts inline event handlers (no script-src-attr, script-src or default-src)")
+    evaluating = _governing(policies, "eval")
+    if not evaluating:
+        add("nothing restricts eval() (no script-src or default-src)")
+    elif all("'unsafe-eval'" in sources for _, sources in evaluating):
+        add(f"{_subject(evaluating)} 'unsafe-eval'{_scope(evaluating)}")
+    return problems
 
 
 def check_csp(headers: HeaderSource) -> Finding:
@@ -163,25 +252,9 @@ def check_csp(headers: HeaderSource) -> Finding:
     policies = _csp_policies(enforced)
     if not policies:
         return Finding("csp", FAIL, "Content-Security-Policy is empty, so it enforces nothing")
-    governing = [found for found in map(_script_directive, policies) if found is not None]
-    if not governing:
+    if not _governing(policies, "elements"):
         return Finding("csp", WARN, "Content-Security-Policy does not restrict scripts (no script-src or default-src), so it does not stop injected scripts")
-    # Every policy is enforced, so a script runs only if every policy that governs
-    # scripts allows it: a weakness counts only when all of those policies share it.
-    directive = governing[0][0]
-    shared = _script_weaknesses(governing[0][1])
-    for _, sources in governing[1:]:
-        others = set(_script_weaknesses(sources))
-        shared = [w for w in shared if w in others]
-    scope = f" in all {len(governing)} policies" if len(governing) > 1 else ""
-    problems = []
-    if "'unsafe-inline'" in shared:
-        problems.append(f"{directive} allows 'unsafe-inline' without a nonce or hash{scope}")
-    if "'unsafe-eval'" in shared:
-        problems.append(f"{directive} allows 'unsafe-eval'{scope}")
-    broad = [w for w in shared if w in BROAD_SCRIPT_SOURCES]
-    if broad:
-        problems.append(f"{directive} allows scripts from " + ", ".join(broad) + scope)
+    problems = _script_problems(policies)
     if problems:
         return Finding("csp", WARN, "; ".join(problems))
     return Finding("csp", PASS, "Content-Security-Policy is set" + (f" ({len(policies)} policies, all enforced)" if len(policies) > 1 else ""))
@@ -191,18 +264,12 @@ def check_csp(headers: HeaderSource) -> Finding:
 
 
 def _allows_any_ancestor(sources: list[str]) -> bool:
-    """True when a frame-ancestors source list lets every site frame the page.
+    """True when a frame-ancestors source list lets every website frame the page.
 
-    That is '*', a scheme on its own such as https:, or a host-source whose host
-    is '*' (https://*). An empty list means 'none'.
+    That is *, http: or https:, or a host-source whose host is * (https://*).
+    Other schemes, such as chrome-extension:, are not websites. An empty list means 'none'.
     """
-    for source in sources:
-        if source == "*" or re.fullmatch(r"[a-z][a-z0-9+.\-]*:", source):
-            return True
-        rest = source.split("://", 1)[1] if "://" in source else source
-        if re.split(r"[:/]", rest, maxsplit=1)[0] == "*":
-            return True
-    return False
+    return bool(_reach(sources) & {"http", "https"})
 
 
 def check_framing(headers: HeaderSource) -> Finding:
