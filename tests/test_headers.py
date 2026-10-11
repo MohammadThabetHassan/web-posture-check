@@ -80,7 +80,7 @@ class HeaderChecksTest(unittest.TestCase):
         self.assertIn("script-src allows 'unsafe-inline'", f.detail)
 
     def test_csp_unsafe_inline_with_nonce_passes(self):
-        f = headers.check_csp({"Content-Security-Policy": "script-src 'self' 'unsafe-inline' 'nonce-abc123'"})
+        f = headers.check_csp({"Content-Security-Policy": "script-src 'self' 'unsafe-inline' 'nonce-abc123'; base-uri 'self'"})
         self.assertEqual(f.status, PASS)
 
     def test_csp_unsafe_inline_with_hash_passes(self):
@@ -131,7 +131,7 @@ class HeaderChecksTest(unittest.TestCase):
         self.assertEqual(f.status, PASS)
 
     def test_csp_strict_dynamic_ignores_broad_sources(self):
-        f = headers.check_csp({"Content-Security-Policy": "script-src 'nonce-abc123' 'strict-dynamic' https: 'unsafe-inline'"})
+        f = headers.check_csp({"Content-Security-Policy": "script-src 'nonce-abc123' 'strict-dynamic' https: 'unsafe-inline'; base-uri 'none'"})
         self.assertEqual(f.status, PASS)
 
     def test_csp_strict_dynamic_does_not_silence_unsafe_eval(self):
@@ -462,7 +462,7 @@ class CspStandardTest(unittest.TestCase):
 
     def test_strict_dynamic_switches_off_unsafe_inline(self):
         # CSP3 section 6.7.3.3: 'strict-dynamic' disables 'unsafe-inline' for scripts, like a nonce or hash.
-        f = headers.check_csp({"Content-Security-Policy": "script-src 'strict-dynamic' 'unsafe-inline'"})
+        f = headers.check_csp({"Content-Security-Policy": "script-src 'strict-dynamic' 'unsafe-inline'; base-uri 'none'"})
         self.assertEqual(f.status, PASS)
 
 
@@ -533,7 +533,7 @@ class CspParsingTest(unittest.TestCase):
 
     def test_ascii_whitespace_separates_sources(self):
         # Tab and form feed are ASCII whitespace; vertical tab is not.
-        self.assertEqual(headers.check_csp({"Content-Security-Policy": "script-src\t'self'\x0c'nonce-abc123'"}).status, PASS)
+        self.assertEqual(headers.check_csp({"Content-Security-Policy": "script-src\t'self'\x0c'nonce-abc123'; base-uri 'none'"}).status, PASS)
         f = headers.check_csp({"Content-Security-Policy": "default-src *; script-src 'self'\x0b'nonce-abc123'"})
         self.assertIn("default-src allows scripts from any host", f.detail)
 
@@ -629,7 +629,7 @@ class CspScriptModelTest(unittest.TestCase):
             self.assertEqual(f.status, WARN, source)
             self.assertIn("'unsafe-inline'", f.detail, source)
         for source in ("'nonce-abc123'", "'nonce-a_b-c'", "'sha384-AbC+/d=='", "'NONCE-Xy9='"):
-            self.assertEqual(self._csp(f"script-src 'self' 'unsafe-inline' {source}").status, PASS, source)
+            self.assertEqual(self._csp(f"script-src 'self' 'unsafe-inline' {source}; base-uri 'self'").status, PASS, source)
 
     def test_script_src_elem_governs_script_elements(self):
         f = self._csp("script-src 'self'; script-src-elem * 'unsafe-inline'")
@@ -659,10 +659,32 @@ class CspScriptModelTest(unittest.TestCase):
         self.assertEqual(f.detail.count("'unsafe-inline'"), 1)
 
     def test_strict_policies_pass(self):
-        for value in ("script-src 'strict-dynamic' 'nonce-abc123' https: 'unsafe-inline'",
+        for value in ("script-src 'strict-dynamic' 'nonce-abc123' https: 'unsafe-inline'; base-uri 'none'",
                       "script-src 'self'; script-src-elem 'self' https://cdn.example.com; script-src-attr 'none'",
                       "default-src 'none'; script-src 'sha256-AbCd='"):
             self.assertEqual(self._csp(value).status, PASS, value)
+
+
+class CspBaseUriTest(unittest.TestCase):
+    """A nonce or 'strict-dynamic' trusts a script whatever its URL, so <base> must be restricted."""
+
+    def _csp(self, *values):
+        return headers.check_csp(HeaderMap([("Content-Security-Policy", value) for value in values]))
+
+    def test_a_nonce_policy_without_base_uri_warns(self):
+        for value in ("script-src 'nonce-abc123'", "script-src 'nonce-abc123' 'strict-dynamic'",
+                      "script-src 'strict-dynamic' 'sha256-AbCd='", "script-src 'nonce-abc123'; base-uri *",
+                      "default-src 'nonce-abc123'; base-uri https:"):
+            f = self._csp(value)
+            self.assertEqual(f.status, WARN, value)
+            self.assertIn("no base-uri restricts <base>", f.detail, value)
+
+    def test_base_uri_or_a_url_bound_policy_passes(self):
+        for values in (("script-src 'nonce-abc123'; base-uri 'none'",), ("script-src 'nonce-abc123'; base-uri 'self'",),
+                       ("script-src 'nonce-abc123'", "base-uri 'self'"),  # any policy may restrict it
+                       ("script-src 'sha256-AbCd='",),  # a hash alone does not trust URLs
+                       ("script-src 'nonce-abc123'", "script-src 'self'")):  # the second policy checks the URL
+            self.assertEqual(self._csp(*values).status, PASS, values)
 
 
 class FramingStandardTest(unittest.TestCase):

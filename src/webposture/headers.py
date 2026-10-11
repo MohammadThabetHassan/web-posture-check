@@ -294,6 +294,16 @@ def _script_problems(policies: list[dict[str, list[str]]]) -> list[str]:
         websocket = any(source.startswith(("ws:", "wss:", "ws://", "wss://")) for _, tokens in per_policy for source in tokens)
         note = "; Safari lets a ws: or wss: source load scripts, as CSP3 specifies" if websocket else ""
         add(f"{_subject(elements)} scripts from {_describe_reach(shared)}{_scope(elements)} ({shown}{note})")
+    # A nonce or 'strict-dynamic' trusts a script whatever its URL, so an injected
+    # <base> tag can point the page's relative script URLs at another host. base-uri
+    # (which does not fall back to default-src) is what stops that.
+    url_blind = elements and all(
+        "'strict-dynamic'" in sources or any(source.startswith("'nonce-") and _NONCE_OR_HASH.fullmatch(source) for source in sources)
+        for _, sources in elements)
+    restricted_base = any("base-uri" in policy and not _reach(policy["base-uri"]) & {"http", "https"} for policy in policies)
+    if url_blind and not restricted_base:
+        add("no base-uri restricts <base>, so injected markup can send the page's nonced relative script URLs to "
+            "another host; set base-uri 'none' or 'self'")
     if not _governing(policies, "handlers"):
         add("nothing restricts inline event handlers (no script-src-attr, script-src or default-src)")
     evaluating = _governing(policies, "eval")
