@@ -133,11 +133,20 @@ def _domain_match(host: str, domain: str) -> bool:
     return host == domain or (host.endswith("." + domain) and not _is_ip(host))
 
 
+def _ascii(name: str) -> str:
+    """A host or domain in lower case and its ASCII (IDNA) form, as browsers compare them."""
+    name = name.lower()
+    try:
+        return name.encode("idna").decode("ascii")
+    except UnicodeError:
+        return name
+
+
 def secure_origin(url: str) -> bool:
     """Whether browsers treat url as a secure origin for Secure cookies: https://, or a loopback host
     (localhost, *.localhost, 127.0.0.0/8, ::1), which Chrome and Firefox trust over plain HTTP too."""
     parts = urlsplit(url)
-    host = parts.hostname or ""
+    host = (parts.hostname or "").rstrip(".")
     if parts.scheme == "https" or host == "localhost" or host.endswith(".localhost"):
         return True
     return _is_ip(host) and ipaddress.ip_address(host).is_loopback
@@ -158,14 +167,26 @@ def cookie_key(name: str, attributes: dict[str, str], url: str = "") -> tuple[st
     the identity in RFC 6265bis and in browsers). url is "" when unknown.
 
     None when the browser rejects the cookie because its Domain does not cover
-    the host that set it (section 5.3, step 6). An IP address can set a Domain
-    of itself only, which browsers then treat as host-only.
+    the host that set it (section 5.3, step 6). As in Chrome, an IP address (an
+    IPv6 one in brackets) and a single-label name such as localhost or com may
+    only name the host itself, which makes the cookie host-only; without a public
+    suffix list, single labels stand in for public suffixes (step 5). Hosts and
+    domains are compared in their ASCII (IDNA) form, and "Domain=." is rejected.
     """
-    domain = attributes.get("domain", "").lower()
+    raw_domain = attributes.get("domain", "")
+    if raw_domain == ".":
+        return None
+    domain = _ascii(raw_domain)
     domain = domain[1:] if domain.startswith(".") else domain
-    host = (urlsplit(url).hostname or "") if url else ""
+    host = _ascii(urlsplit(url).hostname or "") if url else ""
     if domain and host:
-        if domain == host and _is_ip(host):
+        if _is_ip(host):
+            if domain != (f"[{host}]" if ":" in host else host):
+                return None
+            domain = ""
+        elif "." not in domain.rstrip("."):
+            if domain != host:
+                return None
             domain = ""
         elif not _domain_match(host, domain):
             return None
@@ -187,6 +208,12 @@ def _overwrites_secure(key: tuple[str, str, bool, str], jar: dict[tuple[str, str
     return False
 
 
+def _refused_for_its_flags(name: str, attributes: dict[str, str]) -> bool:
+    """A broken __Host- or __Secure- prefix, or SameSite=None without Secure: browsers refuse the Set-Cookie."""
+    samesite = attributes.get("samesite", "").lower()
+    return bool(_prefix_violations(name, attributes)) or (samesite == "none" and "secure" not in attributes)
+
+
 def check_cookies(set_cookies: Sequence[str | SetCookie], is_https: bool, now: datetime | None = None) -> Finding:
     """Check every cookie the response chain leaves in the browser.
 
@@ -198,12 +225,15 @@ def check_cookies(set_cookies: Sequence[str | SetCookie], is_https: bool, now: d
     same name set by another host or for another path is a cookie of its own.
 
     A Set-Cookie the browser rejects changes nothing: a Domain that does not
-    cover the host that sent it, a Secure cookie sent over plain HTTP, or a
-    cookie from plain HTTP that would replace a Secure one (RFC 6265bis; plain
-    HTTP to a loopback host counts as secure, as in browsers).
+    cover the host that sent it, a Secure cookie sent over plain HTTP, a cookie
+    from plain HTTP that would overlay a Secure one (RFC 6265bis; plain HTTP to a
+    loopback host counts as secure, as in browsers), or one refused for its flags
+    (a broken prefix, SameSite=None without Secure). The last kind is still
+    reported, as a FAIL, unless a later valid Set-Cookie replaces it.
     """
     now = now or datetime.now(timezone.utc)
     jar: dict[tuple[str, str, bool, str], tuple[str, dict[str, str], bool, str | None]] = {}
+    refused: dict[tuple[str, str, bool, str], tuple[str, dict[str, str], bool, str | None]] = {}
     for item in set_cookies:
         if isinstance(item, SetCookie):
             value, url, https, via = item.value, item.url, urlsplit(item.url).scheme == "https", item.url if item.redirect else None
@@ -214,10 +244,15 @@ def check_cookies(set_cookies: Sequence[str | SetCookie], is_https: bool, now: d
         key = cookie_key(name, attributes, url)
         if key is None or (not trusted and ("secure" in attributes or _overwrites_secure(key, jar, now))):
             continue
+        if _refused_for_its_flags(name, attributes):
+            if not is_deletion(attributes, now):
+                refused[key] = (name, attributes, https, via)
+            continue
+        refused.pop(key, None)
         jar.pop(key, None)  # keep the report in the order of the last write
         jar[key] = (name, attributes, https, via)
-    live = [entry for entry in jar.values() if not is_deletion(entry[1], now)]
-    deletions = len(jar) - len(live)
+    deletions = sum(1 for entry in jar.values() if is_deletion(entry[1], now))
+    live = [entry for entry in jar.values() if not is_deletion(entry[1], now)] + list(refused.values())
     suffix = f" ({deletions} deletion(s) ignored)" if deletions else ""
     if not live:
         return Finding("cookies", PASS, "no cookies set" + suffix)

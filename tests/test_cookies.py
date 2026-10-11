@@ -276,5 +276,65 @@ class CookieChainTest(unittest.TestCase):
                                    SetCookie("sid=2; Path=/b; Secure; HttpOnly; SameSite=Lax", "https://example.com/")], is_https=True)
         self.assertIn("2 cookie(s)", f.detail)
 
+class BrowserStoreRulesTest(unittest.TestCase):
+    """What browsers refuse to store, checked case by case in Chrome by an independent review."""
+
+    def _check(self, *items, is_https=True):
+        from webposture.cookies import SetCookie
+        return cookies.check_cookies([SetCookie(value, url, redirect=redirect) for value, url, redirect in items], is_https=is_https)
+
+    def test_a_deletion_refused_for_its_flags_leaves_the_cookie(self):
+        for kept, deletion in (("__Host-sid=1; Secure; Path=/", "__Host-sid=; Path=/; Max-Age=0"),
+                               ("__Secure-sid=1; Secure; Path=/", "__Secure-sid=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT"),
+                               ("n=1; Secure; Path=/", "n=; SameSite=None; Path=/; Max-Age=0")):
+            f = self._check((kept, "https://example.com/login", True), (deletion, "https://example.com/", False))
+            self.assertEqual(f.status, WARN, deletion)
+            self.assertIn("missing HttpOnly", f.detail, deletion)
+
+    def test_a_cookie_refused_for_its_flags_is_reported_unless_a_valid_one_replaces_it(self):
+        good = "Secure; Path=/; HttpOnly; SameSite=Lax"
+        refused = self._check(("__Host-sid=1; Path=/", "https://example.com/", False))
+        self.assertEqual(refused.status, FAIL)
+        self.assertIn("__Host- prefix requires Secure (browsers reject it)", refused.detail)
+        replaced = self._check(("__Host-sid=1; Path=/", "https://example.com/login", True), (f"__Host-sid=2; {good}", "https://example.com/", False))
+        self.assertEqual(replaced.detail, "1 cookie(s), no flag problems found")
+
+    def test_hosts_and_domains_are_compared_in_ascii(self):
+        key = cookies.cookie_key
+        self.assertEqual(key("a", {"domain": "xn--bcher-kva.de"}, "https://b\u00fccher.de/"), ("a", "xn--bcher-kva.de", False, "/"))
+        self.assertEqual(key("a", {"domain": "B\u00dcCHER.de"}, "https://xn--bcher-kva.de/"), ("a", "xn--bcher-kva.de", False, "/"))
+        f = self._check(("sid=1; Domain=xn--bcher-kva.de; Path=/", "https://b\u00fccher.de/", False))
+        self.assertEqual(f.status, FAIL)
+
+    def test_special_domains_follow_chrome(self):
+        key = cookies.cookie_key
+        for domain, url in (("localhost", "http://app.localhost/"), ("com", "https://example.com/"),
+                            ("example", "https://x.site.example/"), (".", "https://example.com/"), ("::1", "http://[::1]/")):
+            self.assertIsNone(key("a", {"domain": domain}, url), domain)
+        self.assertEqual(key("a", {"domain": "localhost"}, "http://localhost/"), ("a", "localhost", True, "/"))
+        self.assertEqual(key("a", {"domain": "[::1]"}, "http://[::1]/"), ("a", "::1", True, "/"))
+        self.assertTrue(cookies.secure_origin("http://localhost.:8080/"))
+
+    def test_plain_http_cannot_overlay_a_secure_cookie_in_either_domain_direction(self):
+        # RFC 6265bis 5.7: blocked when either domain covers the other, for the same name and an overlapping path.
+        secure_host = ("sid=1; Secure; Path=/; HttpOnly; SameSite=Lax", "https://a.site.example/", True)
+        overlay_domain = ("sid=2; Domain=site.example; Path=/", "http://b.site.example/", False)
+        self.assertEqual(self._check(secure_host, overlay_domain, is_https=False).detail, "1 cookie(s), no flag problems found")
+        secure_domain = ("sid=1; Secure; Domain=site.example; Path=/; HttpOnly; SameSite=Lax", "https://a.site.example/", True)
+        overlay_host = ("sid=2; Path=/", "http://b.site.example/", False)
+        self.assertEqual(self._check(secure_domain, overlay_host, is_https=False).detail, "1 cookie(s), no flag problems found")
+
+    def test_only_a_live_secure_cookie_of_the_same_name_blocks_plain_http(self):
+        flags = "Path=/; HttpOnly; SameSite=Lax"
+        # Another name, a non-Secure cookie of the same name, or a deleted Secure one: plain HTTP may write.
+        other_name = self._check((f"a=1; Secure; {flags}", "https://example.com/", True), (f"b=1; {flags}", "http://example.com/", False), is_https=False)
+        self.assertIn("2 cookie(s)", other_name.detail)
+        not_secure = self._check((f"a=1; {flags}", "https://example.com/", True), (f"a=; {flags}; Max-Age=0", "http://example.com/", False), is_https=False)
+        self.assertEqual(not_secure.detail, "no cookies set (1 deletion(s) ignored)")
+        deleted = self._check((f"a=1; Secure; {flags}", "https://example.com/", True), (f"a=; Secure; {flags}; Max-Age=0", "https://example.com/x", True),
+                              (f"a=2; {flags}", "http://example.com/", False), is_https=False)
+        self.assertEqual(deleted.detail, "1 cookie(s), no flag problems found")
+
+
 if __name__ == "__main__":
     unittest.main()
