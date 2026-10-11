@@ -123,6 +123,9 @@ class DmarcTest(unittest.TestCase):
 
 
 class DkimTest(unittest.TestCase):
+    def test_dmarc_parts_without_a_value_are_ignored(self):
+        self.assertEqual(emailauth.parse_dmarc_tags("v=DMARC1; p=reject; junk; ;"), {"v": "DMARC1", "p": "reject"})
+
     def test_parse_key_ignores_non_dkim_txt(self):
         self.assertIsNone(emailauth.parse_dkim_key(["google-site-verification=abc"]))
         self.assertEqual(emailauth.parse_dkim_key(["v=DKIM1; k=rsa; p=MIGf MA0"]), "MIGfMA0")

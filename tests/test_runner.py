@@ -14,7 +14,7 @@ import dns.exception
 import dns.resolver
 
 from webposture import caa, cli, cookies, emailauth, fetch, runner
-from webposture.findings import FAIL, WARN
+from webposture.findings import FAIL, PASS, WARN
 
 
 def _cert_error():
@@ -53,6 +53,29 @@ class WrapperProblemTest(unittest.TestCase):
         with mock.patch.object(caa, "lookup_caa", return_value=(None, [], "CAA lookup for example.com failed: Timeout")):
             finding = runner.check_caa("https://example.com/", 5)
         self.assertEqual((finding.check, finding.status), ("caa", WARN))
+
+
+class DnsWrapperTest(unittest.TestCase):
+    """What the wrappers pass on when the lookups work. No network needed."""
+
+    def test_spf_record_of_the_mail_domain_is_checked(self):
+        with mock.patch.object(emailauth, "lookup_txt", return_value=(["v=spf1 -all"], None)) as lookup:
+            finding = runner.check_spf("https://www.example.com/", 5)
+        lookup.assert_called_once_with("example.com", 5)
+        self.assertEqual((finding.check, finding.status), ("spf", PASS))
+
+    def test_no_dmarc_record_on_any_candidate(self):
+        with mock.patch.object(emailauth, "lookup_txt", return_value=([], None)) as lookup:
+            finding = runner.check_dmarc("https://shop.example.com/", 5)
+        self.assertEqual([c.args[0] for c in lookup.call_args_list], ["_dmarc.shop.example.com", "_dmarc.example.com"])
+        self.assertEqual((finding.check, finding.status), ("dmarc", WARN))
+        self.assertIn("no DMARC record", finding.detail)
+
+    def test_caa_records_are_checked(self):
+        with mock.patch.object(caa, "lookup_caa", return_value=("example.com", [(0, "issue", "letsencrypt.org")], None)):
+            finding = runner.check_caa("https://www.example.com/", 5)
+        self.assertEqual((finding.check, finding.status), ("caa", PASS))
+        self.assertIn("letsencrypt.org", finding.detail)
 
 
 class DnsLookupTest(unittest.TestCase):

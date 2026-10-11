@@ -114,8 +114,9 @@ branch = true
 source = ["webposture"]
 
 [tool.coverage.report]
-# Branch coverage; CI fails below this.
-fail_under = 97
+# Branch coverage; CI fails below this. The suite covers 100%; the margin is for
+# lines that only run on some Python versions.
+fail_under = 99
 show_missing = true
 skip_covered = true
 exclude_also = ['if __name__ == "__main__":']

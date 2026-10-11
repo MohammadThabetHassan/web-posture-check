@@ -5,47 +5,18 @@ command, so the certificate fetch and the protocol probes run real
 handshakes. Skipped when openssl is not installed. No internet needed.
 """
 
-import os
 import shutil
 import socket
 import ssl
-import subprocess
 import tempfile
 import threading
 import unittest
 from datetime import datetime, timedelta, timezone
 from unittest import mock
 
+from tls_fixtures import CERT_DAYS, OPENSSL, make_certificates
 from webposture import runner, tls
 from webposture.findings import FAIL, PASS, WARN
-
-OPENSSL = shutil.which("openssl")
-CERT_DAYS = 60
-
-
-def _openssl(folder, *args):
-    # A minimal config of our own, so a missing or unusual system openssl.cnf does not matter.
-    env = dict(os.environ, OPENSSL_CONF=os.path.join(folder, "openssl.cnf"))
-    done = subprocess.run([OPENSSL or "openssl", *args], cwd=folder, env=env, capture_output=True, text=True)
-    if done.returncode:
-        raise RuntimeError(f"openssl {args[0]} failed: {done.stderr}")
-
-
-def _make_certificates(folder):
-    """CA certificate ca.pem, and server.pem/server.key for localhost signed by it."""
-    with open(os.path.join(folder, "openssl.cnf"), "w", encoding="ascii") as handle:
-        handle.write("[req]\ndistinguished_name = dn\n[dn]\n")
-    _openssl(folder, "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", "ca.key", "-out", "ca.pem",
-             "-days", "2", "-subj", "/CN=web-posture-check test CA",
-             "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign,cRLSign")
-    _openssl(folder, "req", "-newkey", "rsa:2048", "-nodes", "-keyout", "server.key", "-out", "server.csr",
-             "-subj", "/CN=localhost")
-    with open(os.path.join(folder, "server.ext"), "w", encoding="ascii") as handle:
-        handle.write("subjectAltName=DNS:localhost,IP:127.0.0.1\nbasicConstraints=CA:FALSE\n"
-                     "keyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\n"
-                     "subjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n")
-    _openssl(folder, "x509", "-req", "-in", "server.csr", "-CA", "ca.pem", "-CAkey", "ca.key", "-CAcreateserial",
-             "-out", "server.pem", "-days", str(CERT_DAYS), "-extfile", "server.ext")
 
 
 class _TlsServer:
@@ -89,9 +60,8 @@ class LiveTlsTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.folder = tempfile.mkdtemp()
-        _make_certificates(cls.folder)
-        cls.ca = os.path.join(cls.folder, "ca.pem")
-        cls.server = _TlsServer(os.path.join(cls.folder, "server.pem"), os.path.join(cls.folder, "server.key"))
+        cls.ca, certfile, keyfile = make_certificates(cls.folder)
+        cls.server = _TlsServer(certfile, keyfile)
 
     @classmethod
     def tearDownClass(cls):

@@ -11,7 +11,7 @@ from collections.abc import Callable
 from contextlib import redirect_stdout
 from unittest import mock
 
-from webposture import cli, emailauth, fetch, runner
+from webposture import cli, emailauth, fetch, output, runner
 from webposture.findings import Finding
 
 
@@ -172,6 +172,13 @@ class CheckSelectionTest(unittest.TestCase):
 
 class ScoreOutputTest(unittest.TestCase):
     """The score and grade reach the JSON output. No network needed."""
+
+    def test_text_has_no_score_when_nothing_was_scored(self):
+        result = runner.failed("https://example.com/", "boom")
+        result["findings"] = [Finding("spf", "WARN", "skipped: no DNS support")]
+        text = output.to_text(result)
+        self.assertNotIn("Score:", text)
+        self.assertIn("[WARN] spf: skipped: no DNS support", text)
 
     def test_json_carries_score_and_grade(self):
         out = io.StringIO()
@@ -732,6 +739,11 @@ class RobustnessTest(unittest.TestCase):
         self.assertEqual(err.getvalue().count("error: invalid target"), len(hostile))
         results = json.loads(out.getvalue())["results"]
         self.assertIn("https://good.example/", [r["url"] for r in results])
+
+    def test_an_unexpected_exception_on_an_invalid_target_keeps_the_target(self):
+        with mock.patch.object(runner, "scan", side_effect=RuntimeError("boom")):
+            result, code = cli.scan_safely(" bad target ", runner.ScanOptions())
+        self.assertEqual((result["url"], code), ("bad target", 2))
 
     def test_an_unexpected_exception_is_one_targets_error(self):
         with mock.patch.object(runner, "scan", side_effect=RuntimeError("boom")):

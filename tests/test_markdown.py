@@ -42,6 +42,12 @@ class RenderTest(unittest.TestCase):
         self.assertIn("no HTTP response, generated", out)
         self.assertIn("> other checks skipped: no trusted HTTPS connection", out)
 
+    def test_error_with_findings_keeps_the_table(self):
+        # --insecure when even the unverified request failed: the certificate finding and the error.
+        out = render([Finding("tls-certificate", FAIL, "certificate is not trusted")], error="could not fetch x: refused")
+        self.assertIn("**Error:** `could not fetch x: refused`\n\n**1 FAIL**, **0 WARN**, 0 PASS\n", out)
+        self.assertIn("| FAIL | `tls-certificate` | `certificate is not trusted` |", out)
+
     def test_grade_leads_the_summary_when_given(self):
         out = render(score=(55, "F"))
         self.assertIn("**Grade F** (55/100): **2 FAIL**, **1 WARN**, 1 PASS", out)
