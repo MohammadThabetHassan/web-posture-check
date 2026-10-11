@@ -77,6 +77,9 @@ def spf_lookups(record: str, lookup: TxtLookup, limit: int = SPF_LOOKUP_LIMIT) -
         terms = list(_spf_terms(text))
         has_all = any(name == "all" and not modifier for name, _, modifier in terms)
         for name, value, modifier in terms:
+            # RFC 7208 section 5.1: mechanisms after "all" are never evaluated.
+            if name == "all" and not modifier:
+                break
             counted = name in _LOOKUP_MECHANISMS if not modifier else name == "redirect" and not has_all
             if not counted:
                 continue
@@ -95,7 +98,8 @@ def spf_lookups(record: str, lookup: TxtLookup, limit: int = SPF_LOOKUP_LIMIT) -
                 continue
             records = spf_records(txt)
             if len(records) != 1:
-                broken = f"{value} ({'no SPF record' if not records else f'{len(records)} SPF records'})"
+                verb = "includes" if name == "include" else "redirects to"
+                broken = f"{verb} {value} ({'no SPF record' if not records else f'{len(records)} SPF records'})"
                 continue
             walk(records[0])
             if count > limit:
@@ -116,7 +120,7 @@ def check_spf(domain: str, txt_strings: Iterable[str], lookup: TxtLookup | None 
         return Finding("spf", FAIL, f"{domain} SPF needs more than {SPF_LOOKUP_LIMIT} DNS lookups (RFC 7208 section 4.6.4), "
                                     f"so receivers return permerror and ignore it: {record}")
     if found.broken:
-        return Finding("spf", FAIL, f"{domain} SPF includes {found.broken}, so receivers that reach it return "
+        return Finding("spf", FAIL, f"{domain} SPF {found.broken}, so receivers that reach it return "
                                     f"permerror and ignore SPF: {record}")
     if found.problem:
         return Finding("spf", WARN if finding.status == PASS else finding.status,
@@ -135,6 +139,11 @@ def _check_spf_record(domain: str, txt_strings: Iterable[str]) -> Finding:
         # RFC 7208 section 4.5: more than one record is a permanent error and receivers ignore SPF.
         return Finding("spf", FAIL, f"{domain} has {len(records)} SPF records; receivers treat that as an error and ignore SPF")
     record = records[0]
+    modifiers = [name for name, _, modifier in _spf_terms(record) if modifier]
+    if modifiers.count("redirect") > 1 or modifiers.count("exp") > 1:
+        # RFC 7208 section 6: each may appear once; more is a permanent error.
+        return Finding("spf", FAIL, f"{domain} SPF repeats a redirect= or exp= modifier, so receivers return permerror "
+                                    f"and ignore it: {record}")
     terms = record.split()[1:]
     for term in terms:
         lower = term.lower()

@@ -214,6 +214,24 @@ class SpfLookupLimitTest(unittest.TestCase):
         self.assertEqual(f.status, PASS)
         self.assertIn("(at least 1 of 10 DNS lookups)", f.detail)
 
+    def test_terms_after_all_are_ignored(self):
+        # RFC 7208 section 5.1: they are never evaluated, so they neither count nor get looked up.
+        f = self._check("v=spf1 ip4:192.0.2.1 -all include:gone.example")
+        self.assertEqual((f.status, f.detail), (PASS, "example.com: v=spf1 ip4:192.0.2.1 -all include:gone.example"))
+        many = " ".join(f"include:i{n}.example" for n in range(12))
+        self.assertEqual(self._check(f"v=spf1 a -all {many}", {f"i{n}.example": ["v=spf1 -all"] for n in range(12)}).status, PASS)
+
+    def test_a_redirect_without_one_spf_record_says_redirect(self):
+        f = self._check("v=spf1 redirect=none.example")
+        self.assertEqual(f.status, FAIL)
+        self.assertIn("redirects to none.example (no SPF record)", f.detail)
+
+    def test_a_repeated_redirect_or_exp_is_a_permerror(self):
+        for record in ("v=spf1 redirect=a.example redirect=b.example", "v=spf1 -all exp=a.example exp=b.example"):
+            f = emailauth.check_spf("example.com", [record])
+            self.assertEqual(f.status, FAIL, record)
+            self.assertIn("repeats a redirect= or exp= modifier", f.detail)
+
     def test_a_record_that_already_fails_is_not_counted(self):
         f = self._check("v=spf1 include:i.example +all")
         self.assertEqual(f.status, FAIL)
