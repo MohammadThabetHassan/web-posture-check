@@ -10,7 +10,9 @@ import io
 import json
 import os
 import re
+import ssl
 import unittest
+import urllib.error
 from contextlib import redirect_stdout
 from unittest import mock
 
@@ -57,6 +59,16 @@ class ContractTest(unittest.TestCase):
         code, out = _json("example.com", side_effect=OSError("connection refused"))
         self.assertEqual(set(json.loads(out)), {"url", "status", "findings", "error"})
         self.assertEqual(code, 2)
+
+    def test_note_json_field_on_a_skipped_target(self):
+        # The promise lists `note`; it appears when a target's other checks were
+        # skipped, such as a broken certificate. The field test above covers a
+        # normal run, which has none, and `error` is a separate unscanned case.
+        cert_error = ssl.SSLCertVerificationError(1, "certificate verify failed")
+        cert_error.verify_code, cert_error.verify_message = 10, "certificate has expired"
+        code, out = _json("bad.example", side_effect=urllib.error.URLError(cert_error))
+        self.assertIn("note", json.loads(out))
+        self.assertEqual(code, 1)
 
     def test_several_targets_json_fields(self):
         _, out = _json("a.example", "b.example")
