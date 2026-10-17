@@ -4,7 +4,9 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- `--min-grade A|B|C|D|F` gates CI on the overall grade: the run also exits 1 when any target grades below the bar. A target with nothing to score does not trip it, so it composes with `--only` / `--skip`.
 
 ## [0.4.0] - 2026-10-11
 

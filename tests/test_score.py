@@ -37,5 +37,16 @@ class ScoreTest(unittest.TestCase):
         self.assertIsNone(score.compute([Finding("spf", WARN, "skipped: x")]))
 
 
+class BelowTest(unittest.TestCase):
+    def test_worse_grade_is_below(self):
+        self.assertTrue(score.below("C", "B"))
+        self.assertTrue(score.below("F", "A"))
+
+    def test_equal_or_better_is_not_below(self):
+        self.assertFalse(score.below("B", "B"))
+        self.assertFalse(score.below("A", "B"))
+        self.assertFalse(score.below("A", "F"))
+
+
 if __name__ == "__main__":
     unittest.main()

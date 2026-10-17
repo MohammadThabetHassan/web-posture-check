@@ -357,6 +357,35 @@ class FailOnTest(unittest.TestCase):
         self.assertEqual(ctx.exception.code, 2)
 
 
+class MinGradeTest(unittest.TestCase):
+    """--min-grade exits 1 when a target grades below the bar. No network needed."""
+
+    # hsts passes, referrer-policy is missing (WARN): two scored, 75/100 -> grade C.
+    HEADERS = {"Strict-Transport-Security": "max-age=31536000"}
+
+    def _code(self, *argv):
+        patched = mock.patch.object(fetch, "fetch_headers", return_value=("https://example.com/", self.HEADERS, [], 200))
+        with patched, redirect_stdout(io.StringIO()):
+            return cli.main(["example.com", "--only", "hsts,referrer-policy", *argv])
+
+    def test_grade_below_bar_exits_1(self):
+        self.assertEqual(self._code("--min-grade", "B"), 1)
+
+    def test_grade_at_bar_exits_0(self):
+        self.assertEqual(self._code("--min-grade", "C"), 0)
+
+    def test_grade_above_bar_exits_0(self):
+        self.assertEqual(self._code("--min-grade", "D"), 0)
+
+    def test_no_min_grade_does_not_gate(self):
+        self.assertEqual(self._code(), 0)
+
+    def test_invalid_grade_is_a_usage_error(self):
+        with mock.patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit) as ctx:
+            cli.main(["example.com", "--min-grade", "E"])
+        self.assertEqual(ctx.exception.code, 2)
+
+
 class RetryTest(unittest.TestCase):
     """Transient failures are retried and explained. No network, no real sleeping."""
 
