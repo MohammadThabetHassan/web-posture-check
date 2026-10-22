@@ -139,6 +139,15 @@ class TlsWithoutServerTest(unittest.TestCase):
         with mock.patch.object(ssl.SSLContext, "set_ciphers", side_effect=ssl.SSLError("no cipher match")):
             self.assertEqual(tls.probe_version("127.0.0.1", 1, ssl.TLSVersion.TLSv1_2, timeout=1), tls.UNTESTABLE)
 
+    def test_a_probe_that_cannot_connect_is_untestable_not_refused(self):
+        sock = socket.socket()
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        results = tls.probe_legacy_protocols("127.0.0.1", port, timeout=2)
+        self.assertEqual(set(results.values()), {tls.UNTESTABLE})
+        self.assertEqual(tls.check_legacy_protocols(results).status, WARN)
+
     def test_a_certificate_without_an_expiry_date_is_not_trusted(self):
         class FakeTls:
             def __enter__(self):
