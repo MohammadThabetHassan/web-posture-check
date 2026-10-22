@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
 from typing import NoReturn
 
-from . import __version__, checks, output, runner, sarif
+from . import __version__, checks, output, runner, sarif, score
 from .findings import ScanResult
 from .textsafe import printable
 
@@ -104,6 +104,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help=f"scan up to N targets at the same time (default 4, max {MAX_JOBS}); results keep the input order")
     parser.add_argument("--fail-on", choices=("fail", "warn"), default="fail",
                         help="exit 1 on any FAIL (default), or with 'warn' on any WARN or FAIL")
+    parser.add_argument("--min-grade", choices=("A", "B", "C", "D", "F"), metavar="GRADE",
+                        help="also exit 1 if any target's grade is worse than GRADE (A best, F worst); a target with nothing to score does not trip it")
     parser.add_argument("--dkim-selector", action="append", metavar="SELECTOR",
                         help="DKIM selector to check (repeatable); by default common selectors are tried")
     selection = parser.add_mutually_exclusive_group()
@@ -243,6 +245,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     # The worst outcome wins: 2 (a target could not be scanned, or a report could
     # not be written) over 1 (a FAIL) over 0.
     code = max(code for _, code in outcomes) if written else 2
+    if args.min_grade:
+        for result in results:
+            graded = score.compute(result["findings"])
+            if graded and score.below(graded[1], args.min_grade):
+                code = max(code, 1)
     if late:
         # Scans still running at the deadline cannot be stopped; leave without waiting for them.
         exit_now(code)

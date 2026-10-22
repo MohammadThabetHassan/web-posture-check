@@ -88,6 +88,7 @@ web-posture-check --list-checks
 | `--only NAMES`, `--skip NAMES` | Comma-separated check names to run or leave out. A left-out check makes no requests. |
 | `--list-checks` | Print every check name with a short description. |
 | `--fail-on fail\|warn` | Exit 1 on any FAIL (default), or on any WARN or FAIL. |
+| `--min-grade A\|B\|C\|D\|F` | Also exit 1 if any target grades below this (A best, F worst). |
 | `--jobs N` | Scan up to `N` targets at the same time (default 4, max 16). Output keeps the input order. |
 | `--timeout SECONDS` | Per-request timeout in seconds, above 0 (default 10). It limits each network operation, so a server that trickles data can keep a scan going longer. |
 | `--deadline SECONDS` | Stop waiting after `SECONDS` for the whole run: targets still being scanned are reported as errors (exit 2) and the reports are written. Off by default. |
@@ -203,7 +204,7 @@ HTTP 200, generated 2026-10-10 15:50 UTC by web-posture-check 0.4.0
 | Code | Meaning |
 |---|---|
 | 0 | No FAIL (WARN findings may exist) |
-| 1 | At least one FAIL, including an untrusted certificate; with `--fail-on warn`, also any WARN |
+| 1 | At least one FAIL, including an untrusted certificate; with `--fail-on warn`, also any WARN; with `--min-grade`, also a target graded below the bar |
 | 2 | A target could not be scanned (an invalid target, a DNS failure, a refused connection, a timeout, or nothing could be fetched even with `--insecure`), or `--output` or `--sarif` could not be written. The other targets and reports are still written |
 | 130 | Interrupted with Ctrl-C; the scans still running are abandoned |
 

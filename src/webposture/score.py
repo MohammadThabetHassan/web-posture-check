@@ -21,6 +21,13 @@ from .findings import FAIL, PASS, SKIPPED_PREFIX, WARN, Finding
 
 POINTS = {PASS: 1.0, WARN: 0.5, FAIL: 0.0}
 GRADES = ((90, "A"), (80, "B"), (70, "C"), (60, "D"))
+# Letter grades from worst to best, so a higher index is a better grade.
+GRADE_ORDER = "FDCBA"
+
+
+def below(grade: str, threshold: str) -> bool:
+    """True when grade is worse than threshold (A is best, F is worst)."""
+    return GRADE_ORDER.index(grade) < GRADE_ORDER.index(threshold)
 
 
 def compute(findings: Iterable[Finding]) -> tuple[int, str] | None:
