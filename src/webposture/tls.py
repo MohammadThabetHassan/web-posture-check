@@ -107,8 +107,13 @@ def probe_version(host: str, port: int, version: ssl.TLSVersion, timeout: float 
     except (ValueError, ssl.SSLError):
         return UNTESTABLE
     try:
-        with socket.create_connection((host, port), timeout=timeout) as sock, \
-                context.wrap_socket(sock, server_hostname=host):
+        sock = socket.create_connection((host, port), timeout=timeout)
+    except OSError:
+        # Refused, unreachable or a DNS error: no ClientHello was sent, so the
+        # server never got to refuse the version.
+        return UNTESTABLE
+    try:
+        with sock, context.wrap_socket(sock, server_hostname=host):
             return ACCEPTED
     except OSError as err:
         return classify_handshake_error(err)
@@ -121,7 +126,7 @@ def check_legacy_protocols(results: Mapping[str, str]) -> Finding:
     if accepted:
         return Finding("tls-protocols", FAIL, f"server accepts {', '.join(accepted)}, which are deprecated (RFC 8996)")
     if untestable:
-        return Finding("tls-protocols", WARN, f"could not test {', '.join(untestable)} from this machine (the local OpenSSL will not offer it), so support is unknown")
+        return Finding("tls-protocols", WARN, f"could not test {', '.join(untestable)} from this machine (the local OpenSSL will not offer it, or the connection failed), so support is unknown")
     return Finding("tls-protocols", PASS, f"server refuses {', '.join(results)}")
 
 

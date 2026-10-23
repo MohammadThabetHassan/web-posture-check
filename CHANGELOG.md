@@ -8,6 +8,10 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 
 - `--min-grade A|B|C|D|F` gates CI on the overall grade: the run also exits 1 when any target grades below the bar. A target with nothing to score does not trip it, so it composes with `--only` / `--skip`.
 
+### Fixed
+
+- `tls-protocols` no longer passes when the legacy TLS probe cannot connect at all. A refused connection, an unreachable host or a DNS error during the TLS 1.0/1.1 probe was counted as the server refusing those versions, so a network failure read as "server refuses TLS 1.0, TLS 1.1"; it is now reported as untestable (WARN).
+
 ## [0.4.0] - 2026-10-11
 
 Findings in GitHub code scanning, browser-accurate parsing, and the quality gates behind it. Built by Mohammad Thabet and Omar Alraas.
