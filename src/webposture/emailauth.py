@@ -8,6 +8,7 @@ network access.
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from typing import NamedTuple
 
@@ -260,6 +261,40 @@ def parse_dkim_key(txt_strings: Iterable[str]) -> str | None:
     return None
 
 
+RSA_ENCRYPTION_OID = bytes.fromhex("2a864886f70d010101")  # 1.2.840.113549.1.1.1
+
+
+def _der_item(der: bytes, i: int) -> tuple[int, int]:
+    """Return the content start and end of the DER element at offset i."""
+    length, i = der[i + 1], i + 2
+    if length & 0x80:
+        size = length & 0x7F
+        length, i = int.from_bytes(der[i:i + size], "big"), i + size
+    return i, i + length
+
+
+def rsa_key_bits(key: str) -> int | None:
+    """Return the modulus size of a DKIM p= value holding an RSA public key.
+
+    The value is a base64 SubjectPublicKeyInfo (RFC 6376 section 3.6.1).
+    Anything else, such as an Ed25519 key (RFC 8463) or a value that does not
+    decode, gives None, so only RSA keys are judged by size.
+    """
+    try:
+        der = base64.b64decode(key, validate=True)
+        spki, _ = _der_item(der, 0)
+        algorithm, algorithm_end = _der_item(der, spki)
+        oid, oid_end = _der_item(der, algorithm)
+        if der[oid:oid_end] != RSA_ENCRYPTION_OID:
+            return None
+        bit_string, _ = _der_item(der, algorithm_end)
+        rsa_key, _ = _der_item(der, bit_string + 1)  # skip the unused-bits byte
+        modulus, modulus_end = _der_item(der, rsa_key)
+    except (ValueError, IndexError):
+        return None
+    return int.from_bytes(der[modulus:modulus_end], "big").bit_length()
+
+
 def check_dkim(domain: str, keys: Mapping[str, str | None], explicit: bool) -> Finding:
     """keys maps each selector tried to its p= value ('' revoked) or None (no key).
 
@@ -275,6 +310,10 @@ def check_dkim(domain: str, keys: Mapping[str, str | None], explicit: bool) -> F
         problems += [f"the key at {sel}._domainkey.{domain} is revoked (empty p=)" for sel in revoked]
         return Finding("dkim", WARN, "; ".join(problems))
     if active:
+        sizes = {sel: rsa_key_bits(keys[sel] or "") for sel in active}
+        weak = [f"{sel} ({bits}-bit)" for sel, bits in sizes.items() if bits is not None and bits < 2048]
+        if weak:
+            return Finding("dkim", WARN, f"RSA key shorter than 2048 bits for {domain} under: {', '.join(weak)}; RFC 8301 asks signers for 2048 bits, and receivers ignore signatures from keys under 1024 bits")
         return Finding("dkim", PASS, f"DKIM key published for {domain} under: {', '.join(active)}")
     tried = ", ".join(keys)
     if revoked:
