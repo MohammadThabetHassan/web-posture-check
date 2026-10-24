@@ -8,6 +8,7 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 
 - `--min-grade A|B|C|D|F` gates CI on the overall grade: the run also exits 1 when any target grades below the bar. A target with nothing to score does not trip it, so it composes with `--only` / `--skip`.
 - `dkim` warns when a published RSA key is shorter than 2048 bits, naming the selector and size. RFC 8301 asks signers for 2048-bit keys, and receivers ignore signatures from keys under 1024 bits. Ed25519 keys are not judged by size.
+- A passing `tls-certificate` names the negotiated protocol version (for example `negotiated TLS 1.3`), so a server that tops out at TLS 1.2 is visible without another tool.
 
 ### Fixed
 
