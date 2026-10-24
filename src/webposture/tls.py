@@ -22,29 +22,32 @@ EXPIRY_WARN_DAYS = 14
 VERIFY_CODE_EXPIRED = 10
 
 
-def fetch_certificate(host: str, port: int = 443, timeout: float = 10.0) -> tuple[datetime | None, int | None, str | None]:
-    """Return (not_after, verify_code, verify_message).
+def fetch_certificate(host: str, port: int = 443,
+                      timeout: float = 10.0) -> tuple[datetime | None, int | None, str | None, str | None]:
+    """Return (not_after, verify_code, verify_message, protocol).
 
     not_after is a UTC datetime when the certificate verifies. When it does not,
     not_after is None and the OpenSSL verify code and message are returned.
+    protocol is the negotiated version, such as "TLSv1.3", when the handshake verified.
     """
     context = ssl.create_default_context()
     try:
         with socket.create_connection((host, port), timeout=timeout) as sock, \
                 context.wrap_socket(sock, server_hostname=host) as tls:
             cert = tls.getpeercert()
+            protocol = tls.version()
     except ssl.SSLCertVerificationError as err:
-        return None, err.verify_code, err.verify_message
+        return None, err.verify_code, err.verify_message, None
     # A verified connection always has a certificate; this only guards the types.
     not_after_text = cert.get("notAfter") if cert else None
     if not isinstance(not_after_text, str):
-        return None, None, "the server sent no certificate expiry date"
+        return None, None, "the server sent no certificate expiry date", None
     not_after = datetime.fromtimestamp(ssl.cert_time_to_seconds(not_after_text), tz=timezone.utc)
-    return not_after, None, None
+    return not_after, None, None, protocol
 
 
 def check_certificate(not_after: datetime | None, verify_code: int | None, verify_message: str | None,
-                      now: datetime) -> Finding:
+                      now: datetime, protocol: str | None = None) -> Finding:
     if verify_code == VERIFY_CODE_EXPIRED:
         return Finding("tls-certificate", FAIL, "certificate has expired")
     if not_after is None:
@@ -59,7 +62,9 @@ def check_certificate(not_after: datetime | None, verify_code: int | None, verif
         # Under a day, "in 0 day(s)" reads like a bug on the most urgent warning.
         when = "in less than a day" if days < 1 else f"in {int(days)} day(s)"
         return Finding("tls-certificate", WARN, f"certificate expires {when}, on {date}; check that renewal is working")
-    return Finding("tls-certificate", PASS, f"certificate valid until {date} ({int(days)} days)")
+    # The version shows at a glance whether the server offers TLS 1.3 or tops out at 1.2.
+    over = f", negotiated {protocol.replace('TLSv', 'TLS ')}" if protocol else ""
+    return Finding("tls-certificate", PASS, f"certificate valid until {date} ({int(days)} days){over}")
 
 
 # Outcomes of trying one protocol version.

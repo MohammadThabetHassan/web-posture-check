@@ -15,6 +15,12 @@ class CheckCertificateTest(unittest.TestCase):
         self.assertEqual(f.status, PASS)
         self.assertIn("valid until 2027-01-08 (90 days)", f.detail)
 
+    def test_pass_names_the_negotiated_version(self):
+        f = tls.check_certificate(NOW + timedelta(days=90), None, None, NOW, protocol="TLSv1.2")
+        self.assertEqual(f.detail, "certificate valid until 2027-01-08 (90 days), negotiated TLS 1.2")
+        # The version is only shown on a pass; a warning keeps its own wording.
+        self.assertNotIn("negotiated", tls.check_certificate(NOW + timedelta(days=5), None, None, NOW, protocol="TLSv1.3").detail)
+
     def test_expiring_within_14_days_warns(self):
         f = tls.check_certificate(NOW + timedelta(days=5), None, None, NOW)
         self.assertEqual(f.status, WARN)

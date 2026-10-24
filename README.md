@@ -194,7 +194,7 @@ HTTP 200, generated 2026-10-10 15:50 UTC by web-posture-check 0.4.0
 | FAIL | `csp` | `Content-Security-Policy header is missing` |
 | FAIL | `https-redirect` | `http://example.com/ is served over plain HTTP without redirecting to HTTPS` |
 | PASS | `http-status` | `final response is HTTP 200` |
-| PASS | `tls-certificate` | `certificate valid until 2026-12-25 (76 days)` |
+| PASS | `tls-certificate` | `certificate valid until 2026-12-25 (76 days), negotiated TLS 1.3` |
 ```
 
 **Score and grade.** Each check counts 1 for PASS, 0.5 for WARN and 0 for FAIL, averaged to 100, so it means the same for any `--only` / `--skip` selection. A is 90 and above, B 80, C 70, D 60, F below. **A needs zero FAILs**: one serious problem cannot hide behind many passes. Skipped checks are shown but not scored.
