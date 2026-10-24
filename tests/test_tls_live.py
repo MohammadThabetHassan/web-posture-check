@@ -74,8 +74,9 @@ class LiveTlsTest(unittest.TestCase):
         return mock.patch.object(ssl, "create_default_context", side_effect=lambda *a, **k: real(cafile=self.ca))
 
     def test_certificate_from_an_unknown_ca_is_not_trusted(self):
-        not_after, verify_code, verify_message = tls.fetch_certificate("localhost", self.server.port, timeout=5)
+        not_after, verify_code, verify_message, protocol = tls.fetch_certificate("localhost", self.server.port, timeout=5)
         self.assertIsNone(not_after)
+        self.assertIsNone(protocol)
         self.assertTrue(verify_code)
         self.assertTrue(verify_message)
         finding = tls.check_certificate(not_after, verify_code, verify_message, now=datetime.now(timezone.utc))
@@ -84,8 +85,9 @@ class LiveTlsTest(unittest.TestCase):
 
     def test_trusted_certificate_returns_its_expiry(self):
         with self._trusting_our_ca():
-            not_after, verify_code, _ = tls.fetch_certificate("localhost", self.server.port, timeout=5)
+            not_after, verify_code, _, protocol = tls.fetch_certificate("localhost", self.server.port, timeout=5)
         self.assertIsNone(verify_code)
+        self.assertIn(protocol, ("TLSv1.2", "TLSv1.3"))
         assert not_after is not None
         expected = datetime.now(timezone.utc) + timedelta(days=CERT_DAYS)
         self.assertLess(abs(not_after - expected), timedelta(days=1))
@@ -96,7 +98,7 @@ class LiveTlsTest(unittest.TestCase):
         with self._trusting_our_ca(), \
                 mock.patch.object(socket, "create_connection",
                                   side_effect=lambda address, timeout: connect(("127.0.0.1", address[1]), timeout)):
-            not_after, verify_code, verify_message = tls.fetch_certificate("wrong.example", self.server.port, timeout=5)
+            not_after, verify_code, verify_message, _ = tls.fetch_certificate("wrong.example", self.server.port, timeout=5)
         self.assertIsNone(not_after)
         self.assertTrue(verify_code)
         self.assertIn("mismatch", str(verify_message).lower())
@@ -106,6 +108,7 @@ class LiveTlsTest(unittest.TestCase):
             finding = runner.check_tls(f"https://localhost:{self.server.port}/", timeout=5)
         self.assertEqual(finding.status, PASS)
         self.assertIn("certificate valid until", finding.detail)
+        self.assertRegex(finding.detail, r", negotiated TLS 1\.[23]$")
 
     def test_modern_tls_is_accepted(self):
         self.assertEqual(tls.probe_version("localhost", self.server.port, ssl.TLSVersion.TLSv1_2, timeout=5), tls.ACCEPTED)
@@ -159,11 +162,14 @@ class TlsWithoutServerTest(unittest.TestCase):
             def getpeercert(self):
                 return {}
 
+            def version(self):
+                return "TLSv1.3"
+
         context = mock.Mock()
         context.wrap_socket.return_value = FakeTls()
         with mock.patch.object(ssl, "create_default_context", return_value=context), \
                 mock.patch.object(socket, "create_connection", return_value=FakeTls()):
-            self.assertEqual(tls.fetch_certificate("example.com"), (None, None, "the server sent no certificate expiry date"))
+            self.assertEqual(tls.fetch_certificate("example.com"), (None, None, "the server sent no certificate expiry date", None))
 
 
 if __name__ == "__main__":
