@@ -1,3 +1,4 @@
+import base64
 import sys
 import unittest
 from unittest import mock
@@ -154,6 +155,43 @@ class DkimTest(unittest.TestCase):
 
     def test_explicit_selector_found_passes(self):
         self.assertEqual(emailauth.check_dkim("example.com", {"mysel": "MIIB"}, explicit=True).status, PASS)
+
+    def test_rsa_key_size_is_read_from_the_key(self):
+        self.assertEqual(emailauth.rsa_key_bits(_spki(_rsa_key(1024))), 1024)
+        self.assertEqual(emailauth.rsa_key_bits(_spki(_rsa_key(2048))), 2048)
+
+    def test_keys_that_are_not_rsa_have_no_size(self):
+        ed25519_spki = _spki(_der(0x03, b"\0" + bytes(32)), oid=bytes.fromhex("2b6570"))
+        self.assertIsNone(emailauth.rsa_key_bits(ed25519_spki))
+        # RFC 8463 publishes Ed25519 keys bare, not as a SubjectPublicKeyInfo.
+        self.assertIsNone(emailauth.rsa_key_bits("11qYAYKxCrfVS/7TyWQHOg7hcvPapiMlrwIaaPcHURo="))
+        self.assertIsNone(emailauth.rsa_key_bits("MIIB"))
+        self.assertIsNone(emailauth.rsa_key_bits("not base64!"))
+
+    def test_rsa_key_under_2048_bits_warns(self):
+        f = emailauth.check_dkim("example.com", {"google": _spki(_rsa_key(1024)), "k1": _spki(_rsa_key(2048))}, explicit=False)
+        self.assertEqual(f.status, WARN)
+        self.assertIn("under: google (1024-bit)", f.detail)
+        self.assertNotIn("k1", f.detail)
+
+    def test_rsa_key_of_2048_bits_passes(self):
+        self.assertEqual(emailauth.check_dkim("example.com", {"google": _spki(_rsa_key(2048))}, explicit=False).status, PASS)
+
+
+def _der(tag, body):
+    n = len(body)
+    size = n.to_bytes((n.bit_length() + 7) // 8, "big")
+    return bytes([tag]) + (bytes([n]) if n < 0x80 else bytes([0x80 | len(size)]) + size) + body
+
+
+def _rsa_key(bits):
+    """A BIT STRING holding an RSAPublicKey whose modulus is exactly bits long."""
+    modulus = b"\0" + ((1 << (bits - 1)) | 1).to_bytes(bits // 8, "big")
+    return _der(0x03, b"\0" + _der(0x30, _der(0x02, modulus) + _der(0x02, b"\x01\x00\x01")))
+
+
+def _spki(key, oid=emailauth.RSA_ENCRYPTION_OID):
+    return base64.b64encode(_der(0x30, _der(0x30, _der(0x06, oid)) + key)).decode()
 
 
 
