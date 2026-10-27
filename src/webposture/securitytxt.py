@@ -6,6 +6,7 @@ status, content type and body and returns a Finding. No network access.
 
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta
 
 from .findings import PASS, WARN, Finding
@@ -14,6 +15,9 @@ PATH = "/.well-known/security.txt"
 
 # RFC 9116 section 2.5.5 recommends an Expires less than a year away.
 MAX_EXPIRES_AHEAD = timedelta(days=365)
+
+# RFC 3339 section 5.6 date-time; the T and Z may be lower case. A time zone offset is required.
+_RFC3339 = re.compile(r"([0-9]{4}-[0-9]{2}-[0-9]{2})[Tt]([0-9]{2}:[0-9]{2}:[0-9]{2})(?:\.([0-9]+))?([Zz]|[+-][0-9]{2}:[0-9]{2})")
 
 
 def parse_fields(body: str) -> dict[str, list[str]]:
@@ -35,17 +39,18 @@ def parse_fields(body: str) -> dict[str, list[str]]:
 
 def parse_expires(value: str) -> datetime | None:
     """Parse an RFC 3339 date-time such as 2027-01-01T00:00:00.000Z. Returns None if invalid."""
-    text = value.strip()
-    if text[-1:] in ("z", "Z"):
-        text = text[:-1] + "+00:00"
+    # fromisoformat alone is too loose on 3.11+ (any separator, week dates, 20270101T000000Z,
+    # no seconds) and too strict on 3.9/3.10 (only 3 or 6 fraction digits), so match the
+    # RFC 3339 date-time grammar first and hand it a normalised string.
+    match = _RFC3339.fullmatch(value.strip())
+    if match is None:
+        return None
+    date, time, fraction, offset = match.groups()
+    offset = "+00:00" if offset in ("z", "Z") else offset
     try:
-        parsed = datetime.fromisoformat(text)
+        return datetime.fromisoformat(f"{date}T{time}.{(fraction or '')[:6].ljust(6, '0')}{offset}")
     except ValueError:
         return None
-    # RFC 3339 requires a time zone offset.
-    if parsed.tzinfo is None:
-        return None
-    return parsed
 
 
 def check_security_txt(status: int | None, content_type: str | None, body: str, now: datetime) -> Finding:
