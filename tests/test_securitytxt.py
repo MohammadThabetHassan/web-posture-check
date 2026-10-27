@@ -62,6 +62,17 @@ class SecurityTxtTest(unittest.TestCase):
         # No time zone offset: not RFC 3339.
         self.assertIn("not a valid RFC 3339", check("Contact: x\nExpires: 2027-06-01T00:00:00\n").detail)
 
+    def test_iso_8601_forms_outside_rfc_3339_warn(self):
+        # datetime.fromisoformat accepts all of these on Python 3.11+.
+        for expires in ("2027-06-01x00:00:00Z", "20270601T000000Z", "2027-06-01T00:00Z", "2027-W22-2T00:00:00Z", "2027-06-01 00:00:00Z"):
+            self.assertIn("not a valid RFC 3339", check(f"Contact: x\nExpires: {expires}\n").detail, expires)
+
+    def test_any_fraction_length_and_lower_case_t_pass(self):
+        for expires in ("2027-06-01T00:00:00.5Z", "2027-06-01t00:00:00.123456789z", "2027-06-01T00:00:00.12+04:00"):
+            f = check(f"Contact: mailto:a@example.com\nExpires: {expires}\n")
+            self.assertEqual(f.status, PASS, expires)
+            self.assertIn("expires 2027-06-01", f.detail)
+
     def test_field_names_are_case_insensitive_and_comments_ignored(self):
         f = check("# Contact: wrong\nCONTACT: https://example.com/report\nexpires: 2027-06-01T00:00:00+04:00\n")
         self.assertEqual(f.status, PASS)
