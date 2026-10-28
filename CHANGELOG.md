@@ -12,6 +12,7 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 
 ### Fixed
 
+- `permissions-policy` passed any non-empty value. A header that does not parse as an RFC 8941 dictionary, most often the old Feature-Policy syntax `camera 'none'; microphone 'none'`, is ignored whole by Chrome, so it restricted nothing while the check said PASS; it now warns.
 - `tls-protocols` no longer passes when the legacy TLS probe cannot connect at all. A refused connection, an unreachable host or a DNS error during the TLS 1.0/1.1 probe was counted as the server refusing those versions, so a network failure read as "server refuses TLS 1.0, TLS 1.1"; it is now reported as untestable (WARN).
 
 ## [0.4.0] - 2026-10-11
