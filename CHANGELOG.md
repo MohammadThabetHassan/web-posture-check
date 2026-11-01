@@ -13,6 +13,7 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 ### Fixed
 
 - `tls-protocols` no longer passes when the legacy TLS probe cannot connect at all. A refused connection, an unreachable host or a DNS error during the TLS 1.0/1.1 probe was counted as the server refusing those versions, so a network failure read as "server refuses TLS 1.0, TLS 1.1"; it is now reported as untestable (WARN).
+- `security-txt` checks `Expires` against the RFC 3339 date-time grammar instead of trusting `datetime.fromisoformat`. On Python 3.11+ that accepted values RFC 9116 does not allow (`2027-06-01x00:00:00Z`, `20270601T000000Z`, a missing seconds field, ISO week dates) and passed them; on Python 3.9/3.10 it rejected valid fractions such as `.5Z`.
 
 ## [0.4.0] - 2026-10-11
 
