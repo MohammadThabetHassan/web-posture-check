@@ -437,12 +437,28 @@ def check_referrer_policy(headers: HeaderSource) -> Finding:
     return Finding("referrer-policy", PASS, shown)
 
 
+# RFC 8941 Dictionary, the syntax Permissions-Policy is defined in: key[=item or inner list][;params], ...
+# Bare items: integer, decimal, string, token, byte sequence, boolean.
+_SF_KEY = r"[a-z*][a-z0-9_.*-]*"
+_SF_BARE = (r'(?:-?(?:\d{1,12}\.\d{1,3}|\d{1,15})|"(?:[\x20\x21\x23-\x5b\x5d-\x7e]|\\["\\])*"'
+            r"|[A-Za-z*][!#$%&'*+.^_`|~0-9A-Za-z:/-]*|:[A-Za-z0-9+/=]*:|\?[01])")
+_SF_PARAMS = rf"(?:;\x20*{_SF_KEY}(?:={_SF_BARE})?)*"
+_SF_ITEM = rf"{_SF_BARE}{_SF_PARAMS}"
+_SF_INNER_LIST = rf"\(\x20*(?:{_SF_ITEM}(?:\x20+{_SF_ITEM})*\x20*)?\){_SF_PARAMS}"
+_SF_MEMBER = rf"{_SF_KEY}(?:=(?:{_SF_INNER_LIST}|{_SF_ITEM})|{_SF_PARAMS})"
+_SF_DICTIONARY = re.compile(rf"{_SF_MEMBER}(?:[\x20\t]*,[\x20\t]*{_SF_MEMBER})*")
+
+
 def check_permissions_policy(headers: HeaderSource) -> Finding:
     value = _headers(headers).combined("Permissions-Policy")
     if value is None:
         return Finding("permissions-policy", WARN, "Permissions-Policy header is missing")
     if not value.strip(" ,"):
         return Finding("permissions-policy", WARN, "Permissions-Policy is empty, so it restricts no browser feature")
+    # A value that does not parse as a structured-field dictionary, such as the old
+    # Feature-Policy syntax "camera 'none'", is dropped whole by Chrome, not member by member.
+    if not _SF_DICTIONARY.fullmatch(value.strip(" ")):
+        return Finding("permissions-policy", WARN, f"Permissions-Policy '{value}' is not valid structured-header syntax, so browsers ignore all of it (write camera=(), not camera 'none')")
     return Finding("permissions-policy", PASS, "Permissions-Policy is set")
 
 

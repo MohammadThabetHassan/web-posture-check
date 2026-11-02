@@ -120,7 +120,7 @@ web-posture-check --list-checks
 | `x-content-type-options` | missing, or its first value is not `nosniff` | |
 | `clickjacking` | no CSP `frame-ancestors` and no `X-Frame-Options` `DENY` or `SAMEORIGIN`; `frame-ancestors` allows any website (`*`, `http:`, `https:`, a host `*` such as `https://*`, a wildcard under a public suffix, or `ws:`/`wss:` in Safari), which browsers apply instead of `X-Frame-Options`; or `X-Frame-Options` has a value browsers ignore, such as `ALLOW-FROM` | |
 | `referrer-policy` | the policy that applies is `unsafe-url` | missing, no recognised value, or `no-referrer-when-downgrade` (the full URL goes to every HTTPS site) |
-| `permissions-policy` | | missing or empty |
+| `permissions-policy` | | missing or empty, or not valid structured-header syntax, which browsers ignore whole (for example the old Feature-Policy form `camera 'none'`, an upper-case feature name, or a trailing comma) |
 | `cross-origin-isolation` | | `Cross-Origin-Opener-Policy` is missing or `unsafe-none`, `Cross-Origin-Resource-Policy` is missing, or any of the three headers has a value browsers do not recognise (values are case-sensitive, `Cross-Origin-Resource-Policy` takes no parameters, and a repeated header is one: browsers combine its values). A missing `Cross-Origin-Embedder-Policy` is reported but not warned about |
 | `x-xss-protection` | | set to `1` (with or without `mode=block`), which turns on the legacy XSS auditor that can be abused for XS-Leaks, or set to an invalid value |
 | `information-leakage` | | a `Server` header includes a version number, or `X-Powered-By`, `X-AspNet-Version` or `X-AspNetMvc-Version` is present |

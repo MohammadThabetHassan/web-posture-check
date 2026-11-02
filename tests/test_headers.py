@@ -808,6 +808,21 @@ class ListedHeaderValuesTest(unittest.TestCase):
     def test_empty_permissions_policy_warns(self):
         self.assertEqual(headers.check_permissions_policy({"Permissions-Policy": " "}).status, WARN)
 
+    def test_valid_permissions_policy_passes(self):
+        for value in ("camera=()", "geolocation=(self \"https://maps.example\"), microphone=*", "fullscreen=(self);report-to=main, usb=()",
+                      "camera=(), microphone=()", "interest-cohort=()", "autoplay=?1", "camera=( )"):
+            with self.subTest(value=value):
+                self.assertEqual(headers.check_permissions_policy({"Permissions-Policy": value}).status, PASS)
+
+    def test_unparseable_permissions_policy_warns(self):
+        # Chrome drops the whole header when the structured-field parse fails.
+        for value in ("camera 'none'; microphone 'none'", "geolocation 'self'", "Camera=()", "camera=(self,)", "camera=(), ",
+                      "camera=('self')", "camera=(self), , usb=()", "camera=(self"):
+            with self.subTest(value=value):
+                f = headers.check_permissions_policy({"Permissions-Policy": value})
+                self.assertEqual(f.status, WARN)
+                self.assertIn("ignore all of it", f.detail)
+
     def test_every_server_header_is_checked(self):
         f = headers.check_information_leakage(HeaderMap([("Server", "cloudflare"), ("Server", "nginx/1.25.3")]))
         self.assertEqual(f.status, WARN)
