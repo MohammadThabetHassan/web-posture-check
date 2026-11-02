@@ -33,7 +33,7 @@ outputs:
     description: Worst letter grade (A to F) across the targets, empty if nothing could be scored.
     value: ${{ steps.scan.outputs.grade }}
   exit-code:
-    description: The tool's exit code (0 no FAIL, 1 a FAIL or with --fail-on warn a WARN, 2 a target could not be reached).
+    description: The tool's exit code (0 no FAIL; 1 a FAIL, or with --fail-on warn a WARN, or with --min-grade a target graded below the bar; 2 a target could not be scanned or a report could not be written).
     value: ${{ steps.scan.outputs.exit-code }}
   report:
     description: Path of the Markdown report file.
