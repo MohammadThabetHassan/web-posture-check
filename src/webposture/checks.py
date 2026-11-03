@@ -28,7 +28,7 @@ CATALOG: tuple[Check, ...] = (
     Check("x-content-type-options", "X-Content-Type-Options: nosniff", 3.0),
     Check("clickjacking", "CSP frame-ancestors or X-Frame-Options", 4.5),
     Check("referrer-policy", "Referrer-Policy is set and not unsafe-url", 2.5),
-    Check("permissions-policy", "Permissions-Policy is set", 2.0),
+    Check("permissions-policy", "Permissions-Policy is set and is valid structured-header syntax", 2.0),
     Check("cross-origin-isolation", "Cross-Origin-Opener, -Resource and -Embedder policies", 2.0),
     Check("x-xss-protection", "the legacy XSS auditor is not turned on", 2.0),
     Check("information-leakage", "no server version or stack headers", 3.0),
