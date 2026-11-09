@@ -10,6 +10,7 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 - `dkim` warns when a published RSA key is shorter than 2048 bits, naming the selector and size. RFC 8301 asks signers for 2048-bit keys, and receivers ignore signatures from keys under 1024 bits. Ed25519 keys are not judged by size.
 - A passing `tls-certificate` names the negotiated protocol version (for example `negotiated TLS 1.3`), so a server that tops out at TLS 1.2 is visible without another tool.
 - `cors` says when a response that reflects the probe Origin has no `Vary: Origin`: a shared cache can then store the answer that echoes one origin and serve it to every other visitor. The status is unchanged; a fixed allow-list value needs no `Vary` and gets no note.
+- `information-leakage` also flags `X-Generator`, which names the CMS or site generator (for example `Drupal 10`, `WordPress`) and hands an attacker the stack to match against known vulnerabilities, the same way `X-Powered-By` does.
 
 ### Fixed
 
