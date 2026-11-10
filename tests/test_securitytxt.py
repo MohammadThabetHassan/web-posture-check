@@ -19,6 +19,11 @@ class SecurityTxtTest(unittest.TestCase):
         self.assertIn("Contact: mailto:security@example.com", f.detail)
         self.assertIn("expires 2027-06-01", f.detail)
 
+    def test_valid_file_over_plain_http_warns(self):
+        f = securitytxt.check_security_txt(200, "text/plain", GOOD, NOW, https=False)
+        self.assertEqual(f.status, WARN)
+        self.assertIn("served over plain HTTP, but RFC 9116 requires HTTPS", f.detail)
+
     def test_missing_file_warns(self):
         for status in (None, 404):
             f = check(body="", status=status)

@@ -127,7 +127,7 @@ def check_security_txt(url: str, timeout: float, context: ssl.SSLContext | None 
     parts = urlsplit(url)
     # A real security.txt is a few KB.
     status, content_type, body = fetch.fetch_text(f"{parts.scheme}://{parts.netloc}{securitytxt.PATH}", timeout, 64 * 1024, context=context)
-    return securitytxt.check_security_txt(status, content_type, body, now=datetime.now(timezone.utc))
+    return securitytxt.check_security_txt(status, content_type, body, now=datetime.now(timezone.utc), https=parts.scheme == "https")
 
 
 def check_https_redirect(http_url: str, timeout: float, context: ssl.SSLContext | None = None) -> Finding:
