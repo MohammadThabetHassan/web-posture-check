@@ -53,8 +53,11 @@ def parse_expires(value: str) -> datetime | None:
         return None
 
 
-def check_security_txt(status: int | None, content_type: str | None, body: str, now: datetime) -> Finding:
-    """WARN only: a missing or stale security.txt is a gap in disclosure, not a vulnerability."""
+def check_security_txt(status: int | None, content_type: str | None, body: str, now: datetime, https: bool = True) -> Finding:
+    """WARN only: a missing or stale security.txt is a gap in disclosure, not a vulnerability.
+
+    https is False when the file was fetched over plain HTTP.
+    """
     if status is None or status == 404:
         return Finding("security-txt", WARN, f"no {PATH}, so researchers have no published way to report vulnerabilities")
     if status != 200:
@@ -66,6 +69,9 @@ def check_security_txt(status: int | None, content_type: str | None, body: str, 
 
     fields = parse_fields(body)
     problems = []
+    if not https:
+        # RFC 9116 section 3: the file MUST be served over HTTPS, or anyone on the path can swap the contact.
+        problems.append("served over plain HTTP, but RFC 9116 requires HTTPS")
     contacts = fields.get("contact", [])
     if not contacts:
         problems.append("missing the required Contact field")

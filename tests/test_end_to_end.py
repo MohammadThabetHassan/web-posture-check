@@ -20,7 +20,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from webposture import cli
 
-LOCAL_CHECKS = "http-status,csp,x-content-type-options,clickjacking,cookies,cors,security-txt"
+# security-txt is left out: RFC 9116 requires HTTPS, so it cannot pass here (test_security_txt_over_plain_http_warns).
+LOCAL_CHECKS = "http-status,csp,x-content-type-options,clickjacking,cookies,cors"
 
 
 def _security_txt():
@@ -135,8 +136,18 @@ class EndToEndTest(unittest.TestCase):
         self.assertEqual(statuses["cookies"], "WARN")
         # The server echoes the probe Origin with credentials: the probe must catch it.
         self.assertEqual(statuses["cors"], "FAIL")
-        self.assertEqual(statuses["security-txt"], "WARN")
         self.assertEqual(code, 1)
+
+    def test_security_txt_over_plain_http_warns(self):
+        # A valid file fetched over plain HTTP warns for that reason alone; a missing file says so.
+        for handler, expected in ((_GoodSite, "/.well-known/security.txt: served over plain HTTP, but RFC 9116 requires HTTPS"),
+                                  (_BadSite, "no /.well-known/security.txt")):
+            out = io.StringIO()
+            with redirect_stdout(out):
+                cli.main([self._serve(handler), "--only", "security-txt", "--json", "--retries", "0", "--timeout", "5"])
+            finding = json.loads(out.getvalue())["findings"][0]
+            self.assertEqual(finding["status"], "WARN", handler.__name__)
+            self.assertTrue(finding["detail"].startswith(expected), finding["detail"])
 
     def test_several_sites_in_one_run_with_markdown_output(self):
         good, bad = self._serve(_GoodSite), self._serve(_BadSite)

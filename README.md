@@ -170,7 +170,7 @@ CAA is looked up from the host up to its top-level domain, as certificate author
 
 | Check | FAIL when | WARN when |
 |---|---|---|
-| `security-txt` | | `/.well-known/security.txt` is missing, not `text/plain`, lacks `Contact` or `Expires`, or has an invalid, expired, duplicate or more-than-a-year-away `Expires` (RFC 9116) |
+| `security-txt` | | `/.well-known/security.txt` is missing, served over plain HTTP, not `text/plain`, lacks `Contact` or `Expires`, or has an invalid, expired, duplicate or more-than-a-year-away `Expires` (RFC 9116) |
 | `https-redirect` | the `http://` URL is served without a redirect, redirects to another `http://` URL, or redirects to something other than `https://` | plain HTTP answers with a response that cannot be read, so the redirect could not be checked |
 
 If nothing answers on plain HTTP at all, `https-redirect` passes, since nothing is served without TLS.
