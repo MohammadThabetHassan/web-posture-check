@@ -48,6 +48,26 @@ class SecurityTxtTest(unittest.TestCase):
         self.assertEqual(f.status, WARN)
         self.assertIn("required Contact", f.detail)
 
+    def test_contact_that_is_not_a_uri_warns(self):
+        # RFC 9116 section 2.5.3: a bare address needs mailto:, and an empty value names nobody.
+        for value in ("security@example.com", "", "+1-201-555-0123"):
+            f = check(f"Contact: {value}\nExpires: 2027-06-01T00:00:00Z\n")
+            self.assertEqual(f.status, WARN, value)
+            self.assertIn(f"Contact '{value}' is not a URI", f.detail)
+
+    def test_plain_http_contact_link_warns(self):
+        f = check("Contact: http://example.com/report\nExpires: 2027-06-01T00:00:00Z\n")
+        self.assertEqual(f.status, WARN)
+        self.assertIn("requires https://", f.detail)
+
+    def test_one_bad_contact_among_good_ones_warns(self):
+        f = check("Contact: mailto:security@example.com\nContact: security@example.com\nExpires: 2027-06-01T00:00:00Z\n")
+        self.assertEqual(f.status, WARN)
+
+    def test_mailto_tel_and_https_contacts_pass(self):
+        for value in ("mailto:security@example.com", "tel:+1-201-555-0123", "https://example.com/report", "MAILTO:a@example.com"):
+            self.assertEqual(check(f"Contact: {value}\nExpires: 2027-06-01T00:00:00Z\n").status, PASS, value)
+
     def test_missing_expires_warns(self):
         self.assertIn("required Expires", check("Contact: mailto:a@example.com\n").detail)
 
