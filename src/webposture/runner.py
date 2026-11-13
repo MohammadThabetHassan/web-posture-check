@@ -98,7 +98,8 @@ def probe_cors(url: str, timeout: float, context: ssl.SSLContext | None = None) 
         return Finding("cors", WARN, f"could not run the CORS probe: {err}")
     # Fetch, "CORS check": repeated headers are combined, so "x, x" is not a match for x.
     allowed = HeaderMap(probe_headers)
-    return cors.check_cors(allowed.combined("Access-Control-Allow-Origin"), allowed.combined("Access-Control-Allow-Credentials"))
+    return cors.check_cors(allowed.combined("Access-Control-Allow-Origin"), allowed.combined("Access-Control-Allow-Credentials"),
+                           vary=allowed.combined("Vary"))
 
 
 def check_tls(url: str, timeout: float) -> Finding:

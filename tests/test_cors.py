@@ -35,6 +35,22 @@ class CheckCorsTest(unittest.TestCase):
         self.assertEqual(f.status, WARN)
         self.assertIn("without credentials", f.detail)
 
+    def test_reflected_origin_without_vary_origin_names_the_cache_risk(self):
+        for vary in (None, "Accept-Encoding"):
+            f = cors.check_cors(PROBE, None, vary=vary)
+            self.assertEqual(f.status, WARN)
+            self.assertIn("no Vary: Origin", f.detail)
+
+    def test_reflected_origin_with_vary_origin_has_no_cache_note(self):
+        for vary in ("Origin", "accept-encoding, ORIGIN", "*"):
+            f = cors.check_cors(PROBE, "true", vary=vary)
+            self.assertEqual(f.status, FAIL)
+            self.assertNotIn("Vary", f.detail)
+
+    def test_fixed_origin_does_not_need_vary(self):
+        # A fixed allow-list value is the same for every Origin, so caching it is harmless.
+        self.assertNotIn("Vary", cors.check_cors("https://app.example.com", "true").detail)
+
     def test_null_origin_with_credentials_fails(self):
         f = cors.check_cors("null", "true")
         self.assertEqual(f.status, FAIL)
@@ -83,6 +99,7 @@ class ProbeCorsTest(unittest.TestCase):
         self.addCleanup(server.shutdown)
         f = probe_cors(f"http://127.0.0.1:{server.server_address[1]}/", timeout=5)
         self.assertEqual(f.status, FAIL)
+        self.assertIn("no Vary: Origin", f.detail)
 
 
 if __name__ == "__main__":

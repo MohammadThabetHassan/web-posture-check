@@ -13,8 +13,9 @@ from .headermap import HTTP_WHITESPACE
 PROBE_ORIGIN = "https://web-posture-check.invalid"
 
 
-def check_cors(allow_origin: str | None, allow_credentials: str | None, probe_origin: str = PROBE_ORIGIN) -> Finding:
-    """allow_origin / allow_credentials are the Access-Control-Allow-* values, or None."""
+def check_cors(allow_origin: str | None, allow_credentials: str | None, probe_origin: str = PROBE_ORIGIN,
+               vary: str | None = None) -> Finding:
+    """allow_origin / allow_credentials are the Access-Control-Allow-* values, vary the Vary value, or None."""
     if allow_origin is None:
         return Finding("cors", PASS, "no Access-Control-Allow-Origin for a foreign origin")
     origin = allow_origin.strip(HTTP_WHITESPACE)
@@ -22,9 +23,13 @@ def check_cors(allow_origin: str | None, allow_credentials: str | None, probe_or
     # value "true" (surrounding whitespace is trimmed), so "TRUE" does not count.
     credentials = (allow_credentials or "").strip(HTTP_WHITESPACE) == "true"
     if origin == probe_origin:
+        # A reflected answer differs per Origin; without Vary: Origin a shared cache
+        # can store the one echoing an attacker's origin and serve it to everyone.
+        varies = {v.strip(HTTP_WHITESPACE).lower() for v in (vary or "").split(",")} & {"origin", "*"}
+        cache = "" if varies else "; no Vary: Origin, so a shared cache can serve this answer to other origins"
         if credentials:
-            return Finding("cors", FAIL, "reflects any Origin with credentials allowed: any website can read authenticated responses")
-        return Finding("cors", WARN, "reflects any Origin (without credentials)")
+            return Finding("cors", FAIL, f"reflects any Origin with credentials allowed: any website can read authenticated responses{cache}")
+        return Finding("cors", WARN, f"reflects any Origin (without credentials){cache}")
     if origin == "null" and credentials:
         # Sandboxed iframes and local files send Origin: null, so this is open to anyone.
         # Browsers match the value exactly (Fetch standard), so "NULL" does not count.
