@@ -542,7 +542,7 @@ def check_cross_origin_isolation(headers: HeaderSource) -> Finding:
 
 # Headers that exist only to name the server-side stack. Any value helps an
 # attacker match the site to known vulnerabilities, so their presence is reported.
-STACK_DISCLOSURE_HEADERS = ("X-Powered-By", "X-AspNet-Version", "X-AspNetMvc-Version")
+STACK_DISCLOSURE_HEADERS = ("X-Powered-By", "X-AspNet-Version", "X-AspNetMvc-Version", "X-Generator")
 
 # A version number such as nginx/1.18.0, Microsoft-IIS/10.0 or Apache/2.
 # "/7F84" style build IDs are not versions, so a digit run must end the token.

@@ -172,6 +172,11 @@ class HeaderChecksTest(unittest.TestCase):
         f = headers.check_information_leakage({"X-Powered-By": "Express"})
         self.assertEqual(f.status, WARN)
 
+    def test_x_generator_warns(self):
+        f = headers.check_information_leakage({"X-Generator": "Drupal 10 (https://www.drupal.org)"})
+        self.assertEqual(f.status, WARN)
+        self.assertIn("X-Generator: Drupal 10 (https://www.drupal.org)", f.detail)
+
     def test_information_leakage_is_warn_only_and_keeps_exit_code(self):
         # The check is WARN-only by design so it never changes the exit code.
         # Run it through the full pipeline on an otherwise-secure response that
