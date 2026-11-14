@@ -43,6 +43,17 @@ class CheckCookiesTest(unittest.TestCase):
         self.assertIn("missing HttpOnly", f.detail)
         self.assertIn("missing SameSite", f.detail)
 
+    def test_unrecognised_samesite_value_warns(self):
+        # Browsers ignore a SameSite value they do not know, so "SameSite=Yes" is no SameSite at all.
+        for value in ("Yes", "true", ""):
+            f = cookies.check_cookies([f"sid=1; Secure; HttpOnly; SameSite={value}"], is_https=True)
+            self.assertEqual(f.status, WARN)
+            self.assertIn(f"sid: SameSite={value} is not Strict, Lax or None", f.detail)
+
+    def test_samesite_values_are_case_insensitive(self):
+        f = cookies.check_cookies(["sid=1; Secure; HttpOnly; SameSite=lAx"], is_https=True)
+        self.assertEqual(f.status, PASS)
+
     def test_samesite_none_without_secure_fails_even_over_http(self):
         f = cookies.check_cookies(["track=1; HttpOnly; SameSite=None"], is_https=False)
         self.assertEqual(f.status, FAIL)
