@@ -13,6 +13,7 @@ All notable changes to this project. The format follows [Keep a Changelog](https
 
 ### Fixed
 
+- `cookies` treated any `SameSite` attribute as present, so `SameSite=Yes` or an empty `SameSite=` passed. Browsers ignore a value that is not `Strict`, `Lax` or `None`, which leaves the cookie with no `SameSite`; it now warns and names the value.
 - `security-txt` passed a valid file fetched over plain HTTP (a site with no HTTPS, or one whose redirects end on `http://`). RFC 9116 requires HTTPS, since anyone on the path can swap the contact address, so it now warns.
 - The `permissions-policy` summary in `--list-checks` and in the SARIF rule still read "Permissions-Policy is set" after the check started rejecting invalid structured-header syntax, so code scanning described a syntax finding as a missing header. It now says the value must also be valid structured-header syntax.
 - `permissions-policy` passed any non-empty value. A header that does not parse as an RFC 8941 dictionary, most often the old Feature-Policy syntax `camera 'none'; microphone 'none'`, is ignored whole by Chrome, so it restricted nothing while the check said PASS; it now warns.

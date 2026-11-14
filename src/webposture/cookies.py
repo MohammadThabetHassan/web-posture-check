@@ -89,6 +89,9 @@ def _problems(name: str, attributes: dict[str, str], is_https: bool) -> list[tup
         problems.append((WARN, "missing HttpOnly"))
     if samesite is None:
         problems.append((WARN, "missing SameSite"))
+    elif samesite.lower() not in ("strict", "lax", "none"):
+        # Browsers ignore a value they do not know (RFC 6265bis section 5.6.7), so the cookie has no SameSite.
+        problems.append((WARN, f"SameSite={samesite} is not Strict, Lax or None (browsers ignore it)"))
     return problems
 
 
