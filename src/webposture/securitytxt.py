@@ -19,6 +19,9 @@ MAX_EXPIRES_AHEAD = timedelta(days=365)
 # RFC 3339 section 5.6 date-time; the T and Z may be lower case. A time zone offset is required.
 _RFC3339 = re.compile(r"([0-9]{4}-[0-9]{2}-[0-9]{2})[Tt]([0-9]{2}:[0-9]{2}:[0-9]{2})(?:\.([0-9]+))?([Zz]|[+-][0-9]{2}:[0-9]{2})")
 
+# A URI starts with a scheme and a colon (RFC 3986 section 3.1).
+_URI = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:\S+")
+
 
 def parse_fields(body: str) -> dict[str, list[str]]:
     """Return {lower-case field name: [values]} from a security.txt body.
@@ -53,6 +56,15 @@ def parse_expires(value: str) -> datetime | None:
         return None
 
 
+def contact_problem(value: str) -> str | None:
+    """Say what is wrong with a Contact value, or None. RFC 9116 section 2.5.3: it must be a URI, and a web link must be https://."""
+    if not _URI.fullmatch(value):
+        return f"Contact '{value}' is not a URI (RFC 9116 wants mailto:, tel: or an https:// link)"
+    if value.lower().startswith("http://"):
+        return f"Contact '{value}' is a plain http:// link, but RFC 9116 requires https://"
+    return None
+
+
 def check_security_txt(status: int | None, content_type: str | None, body: str, now: datetime, https: bool = True) -> Finding:
     """WARN only: a missing or stale security.txt is a gap in disclosure, not a vulnerability.
 
@@ -75,6 +87,7 @@ def check_security_txt(status: int | None, content_type: str | None, body: str, 
     contacts = fields.get("contact", [])
     if not contacts:
         problems.append("missing the required Contact field")
+    problems += [problem for problem in map(contact_problem, contacts) if problem]
     expires_values = fields.get("expires", [])
     expires = None
     if not expires_values:
