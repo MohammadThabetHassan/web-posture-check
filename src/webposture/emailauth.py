@@ -150,6 +150,9 @@ def _check_spf_record(domain: str, txt_strings: Iterable[str]) -> Finding:
         lower = term.lower()
         if lower in ("all", "+all"):
             return Finding("spf", FAIL, f"{domain} SPF ends with '{term}', which authorises every server on the internet: {record}")
+        if lower.lstrip("+").startswith(("ip4:", "ip6:")) and lower.endswith("/0"):
+            # A /0 prefix matches every address, so the term passes any sender before 'all' is reached.
+            return Finding("spf", FAIL, f"{domain} SPF has '{term}', a /0 range that authorises every server on the internet: {record}")
         if lower in ("-all", "~all"):
             return Finding("spf", PASS, f"{domain}: {record}")
         if lower == "?all":

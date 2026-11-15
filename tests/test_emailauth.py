@@ -47,6 +47,17 @@ class CheckSpfTest(unittest.TestCase):
             self.assertEqual(f.status, FAIL, record)
             self.assertIn("every server", f.detail)
 
+    def test_slash_zero_range_fails(self):
+        for record in ("v=spf1 ip4:0.0.0.0/0 -all", "v=spf1 mx +IP6:::/0 ~all"):
+            f = self.check(record)
+            self.assertEqual(f.status, FAIL, record)
+            self.assertIn("/0 range", f.detail)
+
+    def test_slash_zero_range_that_does_not_pass_mail_is_not_flagged(self):
+        # A -ip4 term rejects, and terms after 'all' are never evaluated.
+        for record in ("v=spf1 -ip4:0.0.0.0/0 -all", "v=spf1 -all ip4:0.0.0.0/0", "v=spf1 ip4:192.0.2.0/24 -all"):
+            self.assertEqual(self.check(record).status, PASS, record)
+
     def test_neutral_all_warns(self):
         self.assertIn("neutral", self.check("v=spf1 mx ?all").detail)
 
